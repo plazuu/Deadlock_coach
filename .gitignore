@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Limpet local data (raw API payloads, SQLite db, generated reports)
+/data/
+*.db
+*.sqlite3
+
+# Secrets
+.env
+config.json

@@ -42,21 +42,22 @@ Notes / constraints:
   defensive, and **always persist the raw JSON** so features can be re-derived
   later without re-fetching.
 
-### 1.2 Valve replay files (`.dem`) — Phase 6
+### 1.2 Replay data — Phase 6 (revised after API verification)
 
-The metadata JSON already contains position samples and every major event, so
-replays are a *later enhancement*, not a dependency. They add: exact ability
-casts and cooldowns, per-instance damage, fine-grained movement/camera, and
-precise "what was happening 5s before this death" context.
+`match_info` already contains time-sampled per-player stats, the full item
+timeline, and **death positions** (`death_details[].death_pos` / `killer_pos`),
+so Phases 1–5 need no replay data at all.
 
-- The metadata response includes the pieces to build the replay URL (cluster id +
-  replay salt). Expected pattern:
-  `http://replay{cluster}.valve.net/1422450/{match_id}_{salt}.dem.bz2`
-  (Deadlock app id `1422450`). Verify against current API fields.
-- **No mature pure-Python Source 2 demo parser exists.** Plan: vendor a small
-  Rust or Go parser binary (haste-based), subprocess it, and have it emit JSONL
-  events that the Python `parse/demo.py` layer consumes. This is why replay
-  support is the last phase.
+When finer signal is wanted (exact ability casts, per-instance damage, full
+movement traces), **use the hosted demo-query API — do not build a parser**:
+
+- `POST /v1/matches/demo/query` with `{match_id, query: "<SQL>"}` runs SQL over
+  the demo's entity/event tables and returns a job id.
+- Poll `GET /v1/matches/demo/query/{job_id}` for the result artifact.
+- `GET /v1/matches/demo/schema?match_id=…` lists the queryable tables/columns.
+
+`limpet.api.client.DeadlockClient.demo_query()` already wraps the submit +
+poll loop. Salts are fetched server-side on demand (rate limited).
 
 ---
 
