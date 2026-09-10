@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS reports (
 
 CREATE TABLE IF NOT EXISTS focus_areas (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    dimension          TEXT NOT NULL,                    -- micro|macro
     theme              TEXT NOT NULL,
     status             TEXT NOT NULL DEFAULT 'active',   -- active|improving|resolved
     first_seen_match   INTEGER,

@@ -20,6 +20,15 @@ Current state: Phase 0 + the ingest slice of Phase 1. Implemented = API client,
 config, asset cache, SQLite store, and the `init/whoami/sync/matches/fetch` CLI.
 Not yet built = `parse/`, `features/`, `coach/`, `report/`, the `watch` poller.
 
+**Organizing principle: micro and macro.** Every feature, coaching observation,
+focus area, and drill is tagged `micro` (mechanical execution — CS, aim,
+abilities, fights, dodging) or `macro` (map-level decisions — farm routing,
+rotations, objectives, itemization timing, getting caught). The report, the
+`match_features` JSON (`{micro:{…}, macro:{…}}`), the `focus_areas.dimension`
+column, and the progress trend lines are all split this way. See PLAN.md §1 for
+the sub-dimension rubric. When building `features/` or `coach/`, keep the two
+pillars separate end to end.
+
 ## Commands
 
 The host has Python 3.14 and **no uv/poetry** — a plain venv at `.venv`. Use the

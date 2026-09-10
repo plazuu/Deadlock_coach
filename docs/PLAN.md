@@ -1,239 +1,280 @@
 # Limpet — Deadlock AI Coach
 
 A local, single-user tool that watches your Deadlock match history, pulls each
-game's data from the community API (plus replay files where needed), extracts a
-fixed set of performance features, benchmarks them against players at your rank,
-and asks Claude to write a coaching report. It tracks recurring weaknesses across
-games so the feedback compounds over time.
+game's data from the community API, extracts a fixed set of performance features,
+benchmarks them against players at your rank, and asks Claude to write a coaching
+report. It tracks recurring weaknesses across games so the feedback compounds
+over time.
 
 - **Stack:** Python 3.12+
-- **Data:** `deadlock-api.com` REST API (match metadata + analytics + assets) and,
-  in a later phase, Valve `.dem` replay files
-- **Output:** per-match Markdown report + a running progress log
+- **Data:** [deadlock-api.com](https://api.deadlock-api.com) REST API (match
+  metadata + analytics + assets); the hosted demo-query API for replay-level
+  detail in a later phase
+- **Output:** per-match Markdown report split into **micro** and **macro**, plus a
+  running progress log with a trend line for each
 - **Mode:** `limpet watch` auto-detects new matches on your Steam account and runs
   the pipeline unattended
 - **Scope:** just your account, identified by Steam ID in config
 
+See `docs/api-notes.md` for verified endpoint shapes and the `match_info` schema.
+
 ---
 
-## 1. Data sources
+## 1. Coaching framework: micro and macro
 
-### 1.1 deadlock-api.com (primary)
+Everything the coach produces — every feature, observation, focus area, and drill
+— is tagged **micro** or **macro**. The report has these two as its top-level
+sections and progress tracking carries a separate trend line for each. The split
+keeps feedback actionable: the fix for a micro problem is mechanical practice;
+the fix for a macro problem is a decision rule.
 
-Community-run API. **First implementation task: fetch the live OpenAPI spec from
-`https://api.deadlock-api.com/docs` and pin exact paths / auth / rate limits** —
-the paths below are the expected shape, not verified contracts.
+### Micro — execution in the moment
 
-| Need | Endpoint (expected) | Notes |
+What you do with your hands and your character in the seconds you're doing it.
+
+| Sub-dimension | Signals from `match_info` | Notes |
 |---|---|---|
-| Recent matches for a player | `GET /v1/players/{account_id}/match-history` | Returns `match_id`, hero, result, timestamps. Drives the poller. |
-| Full match data | `GET /v1/matches/{match_id}/metadata` | Protobuf-derived JSON: per-player scoreboard, item purchases w/ timestamps, ability points, **net-worth & XP samples over time**, death events, objective events (towers/walkers/shrines/Patron), sampled player positions, damage matrices. This is the workhorse — very rich even without replays. |
-| Rank / MMR estimate | `GET /v1/players/{account_id}/mmr-history` (or similar) | Needed to pick the correct benchmark bracket. |
-| Aggregate benchmarks | `GET /v1/analytics/...` | Hero win rates, item win rates, and **stat distributions by rank bracket** — the ground truth for "is 480 souls/min at 10:00 good for this hero at Archon?" |
-| Assets (names, metadata) | `https://assets.deadlock-api.com/v2/heroes`, `/v2/items`, `/v2/abilities`, `/v2/ranks` | Static lookup tables. Cache locally, refresh weekly. IDs in metadata are meaningless without these. |
+| Last-hitting & denies | `stats[].creep_kills` / `possible_creeps`, `denies`, `neutral_kills` | CS efficiency = last hits ÷ available. Metadata-only. |
+| Weapon accuracy | `shots_hit` / `shots_missed`, `hero_bullets_hit`, `_crit`, `headshot_kills` | Hit % and crit/headshot rate vs benchmark. |
+| Ability usage | `ability_stats`, `ability_kills`, `stats[].ability_points` | Landing skillshots, upgrade order. Cast-level timing needs the demo query. |
+| Trading & harass | lane-phase `stats[].player_damage` vs `player_damage_taken` | Winning the damage race without overcommitting. |
+| Fight execution | per-death `time_to_kill_s`, damage/healing in the fight window, cooldowns unused at death | Dying with your kit in the tank. |
+| Survivability | `player_damage_taken` vs benchmark, `damage_mitigated`, isolated deaths from `killer_pos` | Avoidable deaths, dodging, defensive item timing. |
 
-Notes / constraints:
-- A free API key (from the deadlock-api Discord) is likely required for the
-  heavier endpoints. Store it in config; send per their docs.
-- Rate limits apply — the client needs a token-bucket limiter + retry/backoff.
-- **Metadata ingestion lag:** after a match ends it takes minutes (sometimes
-  longer) before metadata is queryable. The fetch step must retry-until-available.
-- Deadlock is in active development; schemas drift. Keep normalization thin and
-  defensive, and **always persist the raw JSON** so features can be re-derived
-  later without re-fetching.
+### Macro — decisions across the map and the match
 
-### 1.2 Replay data — Phase 6 (revised after API verification)
+Where you are, what you're doing there, and why — relative to the game state.
 
-`match_info` already contains time-sampled per-player stats, the full item
-timeline, and **death positions** (`death_details[].death_pos` / `killer_pos`),
-so Phases 1–5 need no replay data at all.
+| Sub-dimension | Signals | Notes |
+|---|---|---|
+| Farm routing & economy | `stats[].net_worth` curve, `gold_lane_creep` vs `gold_neutral_creep` vs `gold_boss`, souls/min, post-death downtime | Efficient patterns, not just totals. |
+| Wave & lane management | net-worth slope around objective events, assigned lane vs where farm/deaths happen | Freeze/push inference; sharper with the demo query. |
+| Rotations & tempo | fight-participation %, arrival timing to `death_details` clusters, roam windows | Being where the game is. |
+| Objective control | tower / walker / shrine / mid-boss / Patron timings from `match_info.objectives` + `mid_boss` | Trading objectives, taking them on your timing. |
+| Map awareness | deaths far from allies, ganked before 10:00, repeated deaths in one zone (`death_pos` clustering) | Getting caught is macro, not micro. |
+| Itemization | `items[]` purchase timeline vs benchmark spike timings; reactive buys vs enemy comp | Timing and adaptation, not the exact build. |
+| Risk management | behaviour with a lead vs behind (net-worth delta at death), recall discipline, greeding objectives | Win-condition awareness. |
 
-When finer signal is wanted (exact ability casts, per-instance damage, full
-movement traces), **use the hosted demo-query API — do not build a parser**:
+### Cross-cutting: mental / tilt
 
-- `POST /v1/matches/demo/query` with `{match_id, query: "<SQL>"}` runs SQL over
-  the demo's entity/event tables and returns a job id.
-- Poll `GET /v1/matches/demo/query/{job_id}` for the result artifact.
-- `GET /v1/matches/demo/schema?match_id=…` lists the queryable tables/columns.
+Not a third pillar. When a pattern is behavioural — death spiral after one bad
+fight, forcing plays while behind, abandoning a farm pattern — the coach attaches
+a `mental` flag to the relevant micro or macro item.
 
-`limpet.api.client.DeadlockClient.demo_query()` already wraps the submit +
-poll loop. Salts are fetched server-side on demand (rate limited).
+The sub-dimension lists are a **rubric given to the model as guidance**, not a
+fixed schema. The model may name a more specific theme ("dashing in before your
+2 is up") under the right pillar.
 
 ---
 
-## 2. Architecture
+## 2. Data sources
+
+### 2.1 deadlock-api.com
+
+Base `https://api.deadlock-api.com`, auth via `X-API-KEY` header (optional, ~2×
+rate limits). Endpoints in use are wrapped in `limpet.api.client.DeadlockClient`
+— see `docs/api-notes.md` for the verified list. Key ones:
+
+| Need | Endpoint |
+|---|---|
+| Match history (drives the poller) | `GET /v1/players/{account_id}/match-history` |
+| Full match data (the workhorse) | `GET /v1/matches/{match_id}/metadata` → `{match_info, hero_build_ids, pregame_hero_ids, …}` |
+| Current rank / bracket | `GET /v1/players/{account_id}/rank` (`badge` = the 0–116 `average_badge` scale) |
+| Benchmark quantiles | `GET /v1/analytics/player-stats/metrics` (filter by `hero_ids`, `min/max_average_badge`) |
+| Hero win/pick rates | `GET /v1/analytics/hero-stats` |
+| Static assets | `GET /v1/assets/{heroes,items,ranks}` |
+| Ad-hoc benchmarks | `GET /v1/sql?query=…` (ClickHouse) |
+
+Constraints:
+- **Metadata ingestion lag** — a match is queryable minutes (sometimes longer)
+  after it ends; 404/422 surfaces as `MetadataNotReady` and the caller retries.
+- **Schema drift** — Deadlock is in active development. Normalisation stays thin
+  and defensive; the raw JSON is always persisted so features re-derive offline.
+- Rate limits: client-side min-interval + retry/backoff on 429/5xx.
+
+### 2.2 Replay data — Phase 6
+
+`match_info` already carries time-sampled per-player stats, the full item
+timeline, and death/killer **positions**, so Phases 1–5 need no replay data.
+
+For cast-level ability usage, per-instance damage, and precise movement, use the
+**hosted demo-query API** (`POST /v1/matches/demo/query` with `{match_id, query}`
+→ poll `/v1/matches/demo/query/{job_id}`; schema at `/v1/matches/demo/schema`).
+`DeadlockClient.demo_query()` wraps the submit+poll loop. **Do not build a
+parser.** Sub-dimensions above marked "needs the demo query" are filled here.
+
+---
+
+## 3. Architecture
+
+Current layout (grows toward the tree below as phases land):
 
 ```
-limpet/
-  pyproject.toml
-  src/limpet/
-    config.py            # Steam ID, API key, paths, model settings (pydantic-settings)
-    ids.py               # SteamID64 <-> account_id (SteamID3) conversion
+src/limpet/
+  ids.py               Steam ID resolution (any form -> 32-bit account id)
+  paths.py             single filesystem-layout authority (LIMPET_DATA_DIR)
+  config.py            pydantic-settings: env LIMPET_* > config.json > defaults
+  assets.py            hero/item/rank id->name, disk-cached with TTL
 
-    api/
-      client.py          # deadlock-api.com HTTP client: rate limiting, retry, caching
-      matches.py         # match-history, match metadata
-      analytics.py       # benchmark distributions by hero + rank bracket
-      assets.py          # hero/item/ability/rank lookup tables (cached on disk)
+  api/
+    client.py          the ONLY file that knows deadlock-api URL shapes
+    models.py          typed models for stable responses; metadata stays raw dict
 
-    ingest/
-      poller.py          # watch loop: diff match-history vs DB, enqueue new match_ids
-      fetch.py           # fetch + persist raw metadata; (Phase 6) download .dem
+  ingest.py            match-history sync + raw metadata fetch/cache
 
-    parse/
-      metadata.py        # raw metadata JSON -> typed models (our player slot resolved)
-      demo.py            # Phase 6: drive the parser binary, fold events into features
+  parse/               [Phase 1] resolve our player slot; typed views of match_info
+    metadata.py
+    demo.py            [Phase 6] shape demo-query results
 
-    features/
-      laning.py          # last-hit/deny share, lane state @ 10:00, harass taken/dealt
-      economy.py         # souls/min, net-worth curve vs benchmark, key item timings
-      combat.py          # KDA-in-context, death analysis, damage & healing share,
-                         #   teamfight participation %
-      objectives.py      # tower/walker/shrine timings, rotations, jungle efficiency
-      positioning.py     # Phase 6: overextension, map coverage, isolation deaths
-      benchmarks.py      # attach rank-bracket percentiles to each numeric feature
-      extract.py         # orchestrator -> one MatchFeatures record
+  features/            [Phase 1] deterministic, unit-tested feature extraction
+    common.py          game-phase windows (lane / mid / late), curve + benchmark helpers
+    micro/             lasthits.py  aim.py  abilities.py  trades.py  fights.py  survival.py
+    macro/             economy.py  waves.py  rotations.py  objectives.py  awareness.py  itemization.py
+    benchmarks.py      [Phase 2] attach rank-bracket percentile to each leaf
+    extract.py         orchestrator -> MatchFeatures { micro: {...}, macro: {...} }
 
-    coach/
-      briefing.py        # compact structured match briefing for the LLM (token-bounded)
-      prompt.py          # coaching system prompt + rubric + output schema
-      analyze.py         # Anthropic call -> structured CoachingReport
-      focus.py           # reconcile new mistakes with tracked focus areas; progress deltas
+  coach/               [Phase 3]
+    briefing.py        token-bounded structured briefing (never raw metadata)
+    prompt.py          micro/macro rubric + persona + output schema (prompt-cached)
+    analyze.py         Anthropic call -> CoachingReport
+    focus.py           [Phase 4] reconcile mistakes with tracked focus areas
 
-    report/
-      markdown.py        # render per-match report
-      progress.py        # render / update the running progress log + trend metrics
-
-    store/
-      db.py              # SQLite (sqlite-utils / SQLModel): schema + queries
-      files.py           # raw JSON and .dem cache on disk (content-addressed)
-
-    cli.py               # Typer app
+  report/              [Phase 3] markdown.py (per-match) ; progress.py (PROGRESS.md)
+  store/db.py          SQLite: index + workflow tracker, not source of truth
+  cli.py               Typer app
 ```
+
+Each feature leaf returns `{ value, unit, dimension, sub_dimension }` and, after
+Phase 2, `benchmark_percentile`. `MatchFeatures` is `{ micro: {...}, macro: {...} }`.
 
 ### CLI surface
 
-| Command | Does |
+| Command | Status | Does |
+|---|---|---|
+| `limpet init` | ✅ | Write config, resolve Steam ID, cache assets, verify access |
+| `limpet whoami` | ✅ | Show resolved account id + current rank |
+| `limpet sync` | ✅ | Pull match history into the local db |
+| `limpet matches` | ✅ | List recent history |
+| `limpet fetch <id>` | ✅ | Fetch + cache one match's metadata |
+| `limpet analyze <id>` | Phase 3 | Run the full pipeline, write the report |
+| `limpet backfill --last N` | Phase 4 | Ingest + analyze recent history (Batch API) |
+| `limpet report <id>` | Phase 4 | Re-render from stored data (no re-fetch, no LLM) |
+| `limpet progress` | Phase 4 | Show micro/macro trend lines + open focus areas |
+| `limpet watch` | Phase 5 | Long-running poller |
+
+---
+
+## 4. Data model (SQLite)
+
+`store/db.py`. The database is a derived index — every computed table must
+reconstruct from the raw payloads under `<data_dir>/cache/`.
+
+| Table | Notes |
 |---|---|
-| `limpet init` | Write config, resolve Steam ID -> account id, cache assets, verify API access |
-| `limpet watch` | Long-running poller: detect new matches, run pipeline, write reports, notify |
-| `limpet analyze <match_id>` | Run the full pipeline for one match on demand |
-| `limpet backfill --last 50` | Ingest + analyze recent history (uses Batch API for the LLM step) |
-| `limpet report <match_id>` | Re-render a report from stored data (no re-fetch, no LLM) |
-| `limpet progress` | Show the running progress log and trend metrics |
+| `matches` | one row per match; `raw_meta_path`, `demo_path`, `average_badge` (our bracket at the time), `ingested_at`, `analyzed_at` |
+| `match_features` | `features_json` = `{micro:{…}, macro:{…}}`, `benchmarks_json` = percentile per leaf |
+| `reports` | `markdown` + `structured_json` (the CoachingReport), `model`, `created_at` |
+| `focus_areas` | `theme`, **`dimension`** (`micro`\|`macro`), `status` (`active`\|`improving`\|`resolved`), `first/last_seen_match`, `evidence_match_ids` |
+| `progress_snapshots` | `metrics_json` with `micro` / `macro` sub-objects + `micro_rating` / `macro_rating` rolling averages |
 
 ---
 
-## 3. Data model (SQLite)
+## 5. Per-match pipeline
 
-| Table | Key columns |
-|---|---|
-| `matches` | `match_id` PK, `played_at`, `hero_id`, `result`, `duration_s`, `rank_bracket`, `raw_meta_path`, `demo_path`, `ingested_at`, `analyzed_at` |
-| `match_features` | `match_id` PK, `features_json` (all numeric/categorical features), `benchmarks_json` (percentile for each) |
-| `reports` | `id` PK, `match_id`, `model`, `created_at`, `markdown`, `structured_json` |
-| `focus_areas` | `id` PK, `theme` (e.g. "dying to ganks before 10:00"), `status` (`active` / `improving` / `resolved`), `first_seen_match`, `last_seen_match`, `evidence_match_ids` |
-| `progress_snapshots` | `date` PK, `metrics_json` (rolling souls/min, deaths pre-10, objective participation, benchmark-percentile averages, …) |
+1. **Ingest** (`ingest.py`) — pull `match_info` (retry until available), persist
+   raw, upsert the `matches` row.
+2. **Parse** (`parse/metadata.py`) — resolve *our* `player_slot`; typed views of
+   the scoreboard, `stats[]` timeline, `items[]`, `death_details[]`, objectives.
+3. **Feature extraction** (`features/extract.py`) — run every `micro/*` and
+   `macro/*` leaf. Deterministic, fixture-tested. Output `{micro, macro}`.
+4. **Benchmarking** (`features/benchmarks.py`) — fetch the analytics distribution
+   for `(hero_id, average_badge bracket)`; attach a percentile to every numeric
+   leaf. Feedback is grounded in "players at your level", not pro play.
+5. **Briefing** (`coach/briefing.py`) — token-bounded (~4–12k) structured
+   briefing: scoreboard line, net-worth curve at 1-min samples, ranked event
+   timeline (deaths with killer + soul swing, objectives, key item buys),
+   lane-phase summary, the biggest benchmark deltas **grouped micro vs macro**,
+   and the currently active focus areas. Raw metadata is never sent.
+6. **LLM analysis** (`coach/analyze.py`) — Claude (`claude-opus-5`, adaptive
+   thinking), structured output:
+   ```
+   summary                       # 2–3 sentences: the single biggest lever
+   micro:  { assessment, strengths[], mistakes[], rating_0_100 }
+   macro:  { assessment, strengths[], mistakes[], rating_0_100 }
+     mistakes[] = { timestamp, theme, what_happened, why_it_mattered, fix, mental? }
+   focus_this_week[]             # 1–3, each { dimension, theme, why, drill }
+   progress_note                 # how prior micro/macro focus areas went this game
+   ```
+   Prompt rules: always fill both `micro` and `macro`; if the match was genuinely
+   clean on one axis, say so briefly instead of inventing problems. Don't stack
+   all of `focus_this_week` on one pillar unless that pillar is clearly the
+   bottleneck. `rating` is model-estimated but benchmark-anchored — it feeds the
+   trend line, not a grade. System prompt (rubric + schema) is prompt-cached; the
+   briefing goes after the breakpoint.
+7. **Longitudinal** (`coach/focus.py`) — reconcile new `mistakes` against
+   `focus_areas` **within each dimension** (LLM-assisted clustering, batched),
+   advance statuses, write a `progress_snapshots` row.
+8. **Render** (`report/`) — `reports/<played_at>_<match_id>.md` with Summary →
+   Micro → Macro → Progress; `PROGRESS.md` gets the two trend lines and the open
+   focus areas grouped by dimension.
 
-Raw payloads live on disk under `~/.limpet/cache/`, referenced by path from the DB.
+### Auto-watch loop (`limpet watch`, Phase 5)
 
----
-
-## 4. Per-match pipeline
-
-1. **Ingest** — `fetch.py` pulls metadata JSON (retry until available), stores raw,
-   inserts a `matches` row. Phase 6: also download the `.dem`.
-2. **Parse** — `parse/metadata.py` resolves *your* player slot and produces typed
-   models (scoreboard, timelines, events, purchases).
-3. **Feature extraction** — `features/extract.py` computes a **fixed** feature set
-   across laning / economy / combat / objectives. Deterministic, unit-tested.
-4. **Benchmarking** — `features/benchmarks.py` fetches the analytics distribution
-   for `(hero_id, rank_bracket)` and attaches a percentile to every numeric
-   feature. Feedback is grounded in "players at your level", not pro play.
-5. **Briefing assembly** — `coach/briefing.py` builds a token-bounded (~4–12k
-   tokens) structured briefing: final scoreboard line, net-worth curve as
-   1-minute samples, ranked event timeline (each death with killer + soul swing,
-   objectives, key item buys), lane-phase summary, the biggest benchmark deltas
-   in plain language, and **the currently active focus areas from past games**.
-   Raw metadata (can be MBs) is never sent to the model.
-6. **LLM analysis** — `coach/analyze.py` calls Claude (`claude-opus-5`, adaptive
-   thinking) with a structured-output schema:
-   - `summary`
-   - `did_well[]`
-   - `key_mistakes[]` — `{ timestamp, what_happened, why_it_mattered, what_to_do_instead }`
-   - `focus_this_week[]` — 1–3 items
-   - `drills[]` — concrete practice tasks
-   - `progress_note` — how you did on prior focus areas this game
-   The system prompt (rubric + schema + persona) is **prompt-cached**; the
-   per-match briefing goes after the cache breakpoint.
-7. **Longitudinal update** — `coach/focus.py` reconciles new `key_mistakes`
-   against `focus_areas` (LLM-assisted clustering, run over the batch), updates
-   statuses (`active` → `improving` → `resolved`), and writes a
-   `progress_snapshots` row with rolling metrics.
-8. **Render** — `report/markdown.py` writes `reports/<played_at>_<match_id>.md`;
-   `report/progress.py` updates `PROGRESS.md` with trend arrows.
-
-### Auto-watch loop (`limpet watch`)
-
-- Poll `match-history` every N minutes (configurable, default 10).
-- Diff against `matches`; enqueue new `match_id`s; persist last-seen id/timestamp.
-- Run the pipeline per match; on metadata-not-ready, requeue with backoff.
-- On completion: desktop notification + append a one-line entry to a daily digest
-  file (`~/.limpet/digests/YYYY-MM-DD.md`).
-- Respect rate limits; single-flight; survive restarts (queue state in SQLite).
+Poll `match-history` every N min; diff against `matches`; enqueue new ids; run the
+pipeline; on `MetadataNotReady` requeue with backoff. On completion: desktop
+notification + a line in `digests/YYYY-MM-DD.md`. Restart-safe (queue in SQLite).
 
 ---
 
-## 5. LLM usage notes
+## 6. LLM usage notes
 
-- **Model:** `claude-opus-5` for the coaching analysis. Adaptive thinking on.
-  Structured outputs via `output_config.format`.
-- **Cheap path:** the focus-area clustering / dedup step can run on
-  `claude-haiku-4-5`, batched.
-- **Backfill:** use the Message Batches API (50% cost) for `limpet backfill`.
-- **Don't trust the model's Deadlock knowledge.** Hero/item/ability facts change
-  constantly and post-date the training cutoff. Put the relevant facts (from the
-  assets API) *into the briefing* and instruct the model to reason from the
-  supplied numbers and event log, not from memory.
-- **Token budget:** target briefing ≤ 12k tokens; hard-cap and log if a match
-  would exceed it rather than silently truncating.
-- Auth: use `ant auth` profile or `ANTHROPIC_API_KEY` (see the claude-api skill).
+- **Model:** `claude-opus-5`, adaptive thinking, structured outputs via
+  `output_config.format`.
+- **Cheap path:** focus-area clustering can run on `claude-haiku-4-5`, batched.
+- **Backfill:** Message Batches API (50% cost).
+- **Don't trust the model's Deadlock knowledge** — it post-dates the training
+  cutoff and changes every patch. Put the facts (from the assets API) *in the
+  briefing* and instruct the model to reason from the supplied numbers and event
+  log, not memory.
+- **Token budget:** briefing ≤ `settings.briefing_token_budget` (default 12k);
+  hard-cap and log rather than silently truncate.
+- Auth: `LIMPET_ANTHROPIC_API_KEY`, else `ANTHROPIC_API_KEY` / `ant auth` profile.
 
 ---
 
-## 6. Phases
+## 7. Phases
 
 | Phase | Deliverable |
 |---|---|
-| **0 — Scaffold** | `pyproject.toml`, `config.py`, `ids.py`, deadlock-api client with rate limiting, pull & pin the OpenAPI spec, cache assets, `limpet init`. Fetch one real match's metadata to `cache/` and eyeball it. |
-| **1 — Features** | `parse/metadata.py` + `features/` for laning/economy/combat/objectives. SQLite store. `limpet analyze` produces a features JSON (no LLM yet). Fixtures from real matches; unit tests. |
-| **2 — Benchmarks** | `analytics.py` + `features/benchmarks.py`. Every numeric feature gets a rank-bracket percentile. |
-| **3 — Coach** | `coach/briefing.py`, `prompt.py`, `analyze.py`; `report/markdown.py`. `limpet analyze <match_id>` writes a full Markdown coaching report. |
-| **4 — Longitudinal** | `focus_areas` + `progress_snapshots`, `coach/focus.py`, `report/progress.py`, `limpet progress`, `limpet backfill`. |
-| **5 — Auto-watch** | `ingest/poller.py`, `limpet watch`, notifications + daily digest, restart-safe queue. |
-| **6 — Replays (stretch)** | Vendor a `.dem` parser binary, `parse/demo.py`, `features/positioning.py`; fold positional signals into the briefing. |
+| **0 — Scaffold** ✅ | API client, config, asset cache, SQLite store, `init/whoami/sync/matches/fetch`. |
+| **1 — Features** | `parse/metadata.py`; `features/micro/*` + `features/macro/*` (metadata-only leaves) + `extract.py`. `limpet analyze` emits a `{micro,macro}` features JSON (no LLM). Committed fixture matches + unit tests. |
+| **2 — Benchmarks** | `features/benchmarks.py`: rank-bracket percentile on every leaf. |
+| **3 — Coach** | `coach/{briefing,prompt,analyze}.py`, `report/markdown.py`. `limpet analyze <id>` writes the two-section Markdown report. |
+| **4 — Longitudinal** | `focus_areas` (with `dimension`) + `progress_snapshots`, `coach/focus.py`, `report/progress.py`, `limpet progress` / `backfill` / `report`. |
+| **5 — Auto-watch** | `limpet watch`: poller, notifications, daily digest, restart-safe queue. |
+| **6 — Replays (stretch)** | `parse/demo.py` over the hosted demo-query API; fill the "needs the demo query" leaves (cast-level abilities, wave management, precise rotations). |
 
 ---
 
-## 7. Key risks & mitigations
+## 8. Key risks & mitigations
 
 | Risk | Mitigation |
 |---|---|
-| deadlock-api paths / auth / limits unverified | Phase 0 pulls the live OpenAPI spec and pins everything; client isolates all API shape behind `api/`. |
-| Metadata schema drift (game in active dev) | Thin, defensive normalization; always keep raw JSON; features re-derivable offline. |
-| Metadata not immediately available post-match | Retry-until-available with backoff in `fetch.py`; poller requeues. |
-| No pure-Python Source 2 demo parser | Deferred to Phase 6; subprocess a vendored Rust/Go binary emitting JSONL. |
-| LLM hallucinating current Deadlock mechanics | Facts supplied in-briefing from assets API; prompt forbids reasoning from memory. |
-| Briefing too large / expensive | Token-bounded assembly with a hard cap and a log line; net-worth curve downsampled to 1-min. |
-| Benchmarks vs wrong skill bracket | Resolve rank from mmr-history per match; store `rank_bracket` on the row. |
+| Metadata schema drift (game in active dev) | Thin defensive parsing; raw JSON always kept; features re-derivable offline; models use `extra="allow"`. |
+| Metadata not available right after a match | `MetadataNotReady` + retry/backoff; poller requeues. |
+| Micro/macro attribution is fuzzy for some signals (e.g. a death) | The rubric assigns each sub-dimension a home; "getting caught" is macro, "lost the 1v1" is micro. The model gets that guidance explicitly. |
+| LLM inventing balance on a clean axis | Prompt: state "solid this game" briefly rather than manufacture mistakes; `focus_this_week` may be 1 item. |
+| LLM hallucinating current mechanics | Facts in-briefing from the assets API; prompt forbids reasoning from memory. |
+| Briefing too large / expensive | Token-bounded assembly, hard cap + log line, curves downsampled. |
+| Benchmarks vs wrong skill bracket | Resolve rank per match, store `average_badge` on the row. |
 
 ---
 
-## 8. Testing
+## 9. Testing
 
-- **Fixtures:** record real API responses (VCR-style) for 3–5 matches across
-  different heroes/outcomes; commit as test data.
-- **Feature extraction:** unit tests asserting known values from those matches.
-- **Report rendering:** snapshot tests.
+- **Fixtures:** commit raw API responses for 3–5 matches across heroes/outcomes.
+- **Feature extraction:** unit tests asserting known micro & macro leaf values.
+- **Report rendering:** snapshot tests on both sections.
 - **Coach:** a small eval set of hand-labelled matches ("this game the main
-  mistake was X") to check the report surfaces the right primary issue; run on
-  model changes.
+  problem was macro: farmed a dead lane while mid fell") to check the report puts
+  the primary issue in the right pillar; re-run on model/prompt changes.
