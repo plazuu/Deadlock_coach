@@ -16,13 +16,15 @@ that track recurring weaknesses over time.
   limits, and the `match_info` schema. Trust this over guessing; re-verify against
   `https://api.deadlock-api.com/openapi.json` if something looks off.
 
-Current state: Phases 0–2. Implemented = API client, config, asset cache, SQLite
+Current state: Phases 0–3. Implemented = API client, config, asset cache, SQLite
 store, `parse/metadata.py`, `features/{micro,macro}/*` + `extract.py` +
-`benchmarks.py`, and the `init/whoami/sync/matches/fetch/analyze` CLI. `analyze`
-computes `{micro,macro}` features with rank-bracket benchmark percentiles
-attached where a genuine stat match exists, but does not call an LLM yet — no
-Anthropic key is required for anything that exists today. Not yet built =
-`coach/`, `report/` (Phase 3+), the `watch` poller (Phase 5).
+`benchmarks.py`, `coach/{briefing,prompt,schema,analyze}.py`,
+`report/markdown.py`, and the full `init/whoami/sync/matches/fetch/analyze` CLI.
+`limpet analyze <id>` now produces a real coaching report (Anthropic key
+required — `ANTHROPIC_API_KEY` or `LIMPET_ANTHROPIC_API_KEY`; `--no-report`
+stops after features/benchmarks if you don't have one configured). Not yet
+built = `coach/focus.py`, `report/progress.py` (Phase 4), the `watch` poller
+(Phase 5).
 
 **Organizing principle: micro and macro.** Every feature, coaching observation,
 focus area, and drill is tagged `micro` (mechanical execution — CS, aim,
@@ -94,9 +96,27 @@ features/*.py   micro/ and macro/ leaf modules (see the organizing principle
                 Each leaf degrades gracefully (value=None + note, or
                 needs_demo=True) instead of guessing when data isn't available
                 from match_info alone.
+coach/*.py      briefing.py (assemble) -> analyze.py (call Claude) -> a
+                validated CoachingReport (schema.py). Takes an anthropic.Anthropic
+                client as a parameter rather than constructing one — same
+                dependency-injection shape as DeadlockClient, so tests inject a
+                fake and no test hits the real API.
+report/markdown.py   CoachingReport -> the per-match .md file.
 store/db.py     SQLite. An index and workflow tracker, NOT the source of truth.
 cli.py          Typer app. Thin — delegates to the modules above.
 ```
+
+### Coaching reports (`coach/`, `report/markdown.py`)
+
+`schema.py` hand-inlines the JSON schema sent to the API (`REPORT_JSON_SCHEMA`)
+rather than generating it from the `CoachingReport` pydantic model — deliberate,
+so nothing depends on `$ref`/`$defs` support in structured outputs (unverified).
+Keep the two in sync by hand when the shape changes. `analyze.py` raises
+`CoachError` for every failure mode (auth, rate limit, refusal, schema
+mismatch) — `cli.py` catches it and still keeps the already-saved
+features/benchmarks, it just skips the report. The prompt (`prompt.py`) is a
+single stable string for cache-friendliness — never interpolate per-match
+content into it; per-match content only ever goes in the user-turn briefing.
 
 ### Feature leaves
 

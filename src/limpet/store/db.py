@@ -168,3 +168,32 @@ def save_features(
             computed_at,
         ),
     )
+
+
+def save_report(
+    conn: sqlite3.Connection,
+    match_id: int,
+    model: str,
+    markdown: str,
+    structured: dict[str, Any],
+    created_at: int,
+) -> None:
+    conn.execute(
+        "INSERT INTO reports (match_id, model, created_at, markdown, structured_json) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (match_id, model, created_at, markdown, json.dumps(structured)),
+    )
+
+
+def active_focus_areas(conn: sqlite3.Connection, limit: int = 10) -> list[sqlite3.Row]:
+    """Focus areas still being worked on, most recently touched first.
+
+    Empty until `coach/focus.py` (Phase 4) exists to populate `focus_areas` —
+    wired now so the briefing's `active_focus_areas` slot is real from the
+    start rather than a placeholder to revisit later.
+    """
+    return conn.execute(
+        "SELECT * FROM focus_areas WHERE status IN ('active', 'improving') "
+        "ORDER BY updated_at DESC LIMIT ?",
+        (limit,),
+    ).fetchall()

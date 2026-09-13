@@ -134,13 +134,16 @@ src/limpet/
     benchmarks.py      ✅ attach rank-bracket percentile to each mapped leaf
     extract.py         ✅ orchestrator -> MatchFeatures { micro: {...}, macro: {...} }
 
-  coach/               [Phase 3]
-    briefing.py        token-bounded structured briefing (never raw metadata)
-    prompt.py          micro/macro rubric + persona + output schema (prompt-cached)
-    analyze.py         Anthropic call -> CoachingReport
+  coach/
+    briefing.py        ✅ token-bounded structured briefing (never raw metadata)
+    prompt.py          ✅ micro/macro rubric + persona (see §5a on active_focus_areas)
+    schema.py          ✅ CoachingReport (pydantic) + the hand-inlined REPORT_JSON_SCHEMA
+    analyze.py         ✅ Anthropic call -> CoachingReport; CoachError on any failure
     focus.py           [Phase 4] reconcile mistakes with tracked focus areas
 
-  report/              [Phase 3] markdown.py (per-match) ; progress.py (PROGRESS.md)
+  report/
+    markdown.py        ✅ Summary -> Micro -> Macro -> Focus this week -> Progress
+    progress.py        [Phase 4] regenerate PROGRESS.md from focus_areas/progress_snapshots
   store/db.py          SQLite: index + workflow tracker, not source of truth
   cli.py               Typer app
 ```
@@ -157,7 +160,7 @@ Phase 2, `benchmark_percentile`. `MatchFeatures` is `{ micro: {...}, macro: {...
 | `limpet sync` | ✅ | Pull match history into the local db |
 | `limpet matches` | ✅ | List recent history |
 | `limpet fetch <id>` | ✅ | Fetch + cache one match's metadata |
-| `limpet analyze <id>` | ✅ (features + benchmarks) | Parse, compute `{micro,macro}` features, attach rank-bracket benchmark percentiles, save + print JSON. No LLM call yet — that's Phase 3. |
+| `limpet analyze <id>` | ✅ | Parse, compute `{micro,macro}` features, attach benchmark percentiles, call Claude for a coaching report, render + save the Markdown. `--no-report` stops after features/benchmarks (no Anthropic call). |
 | `limpet backfill --last N` | Phase 4 | Ingest + analyze recent history (Batch API) |
 | `limpet report <id>` | Phase 4 | Re-render from stored data (no re-fetch, no LLM) |
 | `limpet progress` | Phase 4 | Show micro/macro trend lines + open focus areas |
@@ -318,7 +321,7 @@ Phase 0.
 | **0 — Scaffold** ✅ | API client, config, asset cache, SQLite store, `init/whoami/sync/matches/fetch`. |
 | **1 — Features** ✅ | `parse/metadata.py`; `features/micro/*` + `features/macro/*` (metadata-only leaves) + `extract.py`. `limpet analyze` emits a `{micro,macro}` features JSON (no LLM). Fixture match (`tests/fixtures/match_104887482.json`) + unit tests. `waves.py` and part of `rotations.py` are honestly stubbed (`needs_demo: true`) — they need Phase 6. |
 | **2 — Benchmarks** ✅ | `features/benchmarks.py`: `GET /v1/analytics/player-stats/metrics` (hero + rank-bracket-windowed) already returns a full percentile breakdown per stat — no quantile math of our own. Only leaves with a genuine 1:1 match to an API-tracked stat get a `benchmark_percentile` (`LEAF_TO_STAT`, 8 leaves); everything else is left alone rather than forced. |
-| **3 — Coach** | `coach/{briefing,prompt,analyze}.py`, `report/markdown.py`. `limpet analyze <id>` writes the two-section Markdown report. |
+| **3 — Coach** ✅ | `coach/{briefing,prompt,schema,analyze}.py`, `report/markdown.py`. `limpet analyze <id>` writes the Summary/Micro/Macro/Focus/Progress Markdown report. Schema is hand-inlined JSON (no `$ref`/`$defs`) validated against `CoachingReport`; `active_focus_areas` in the briefing and `db.active_focus_areas()` are wired but empty until Phase 4 populates them. Unit-tested against a fake Anthropic client — no real API calls in the test suite. |
 | **4 — Longitudinal** | `focus_areas` (with `dimension`) + `progress_snapshots`, `coach/focus.py`, `report/progress.py`, `limpet progress` / `backfill` / `report`. |
 | **5 — Auto-watch** | `limpet watch`: poller, notifications, daily digest, restart-safe queue. |
 | **6 — Replays (stretch)** | `parse/demo.py` over the hosted demo-query API; fill the "needs the demo query" leaves (cast-level abilities, wave management, precise rotations). |

@@ -7,7 +7,7 @@ Phase 0/1 surface:
   limpet matches [--limit N]  list recent match history
   limpet fetch <match_id>     fetch + cache full match metadata
   limpet sync                 pull match history into the local db
-  limpet analyze <match_id>   compute micro/macro features for one match (no LLM yet)
+  limpet analyze <match_id>   features + benchmarks + (with a key) a coaching report
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ import json
 import time
 from typing import Annotated
 
+import anthropic
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -24,6 +25,10 @@ from . import paths
 from .api.client import DeadlockAPIError, DeadlockClient, MetadataNotReady
 from .api.models import MatchHistoryEntry, PlayerRank
 from .assets import Assets
+from .coach.analyze import CoachError
+from .coach.analyze import analyze_match as run_coach
+from .coach.briefing import build as build_briefing
+from .coach.briefing import estimate_tokens
 from .config import Settings, load_settings, write_config
 from .features.benchmarks import attach as attach_benchmarks
 from .features.benchmarks import fetch_hero_distributions
@@ -38,6 +43,7 @@ from .ingest import (
 )
 from .parse.metadata import PlayerNotInMatch
 from .parse.metadata import load as load_match
+from .report.markdown import render as render_report
 from .store import db
 
 app = typer.Typer(add_completion=False, help="A local AI coach for Deadlock.")
@@ -191,8 +197,12 @@ def fetch(
 @app.command()
 def analyze(
     match_id: Annotated[int, typer.Argument(help="Match id to analyze.")],
+    report: Annotated[
+        bool,
+        typer.Option(help="Also call Claude for a coaching report (needs an Anthropic key)."),
+    ] = True,
 ) -> None:
-    """Compute micro/macro features for one match. No LLM call yet (Phase 3)."""
+    """Compute micro/macro features + benchmarks, then (by default) a coaching report."""
     settings = load_settings()
     account_id = _require_account(settings)
     meta = cached_metadata(match_id)
@@ -238,7 +248,61 @@ def analyze(
         db.save_features(conn, match_id, feats_dict, distributions, now)
         conn.execute("UPDATE matches SET analyzed_at = ? WHERE match_id = ?", (now, match_id))
 
-    console.print_json(json.dumps(feats_dict))
+        if not report:
+            console.print_json(json.dumps(feats_dict))
+            return
+
+        assets = Assets(client)
+        player = view.player(account_id)
+        hero_name = assets.hero_name(player.get("hero_id", 0))
+        won = bool(view.winning_team is not None and player.get("team") == view.winning_team)
+        focus_areas = [
+            {"dimension": r["dimension"], "theme": r["theme"], "status": r["status"]}
+            for r in db.active_focus_areas(conn)
+        ]
+        briefing = build_briefing(
+            feats_dict,
+            match_id=match_id,
+            hero_name=hero_name,
+            won=won,
+            duration_s=view.duration_s,
+            rank_name=assets.rank_name(view.average_badge(account_id)),
+            active_focus_areas=focus_areas,
+        )
+        est_tokens = estimate_tokens(json.dumps(briefing))
+        if est_tokens > settings.briefing_token_budget:
+            console.print(
+                f"[yellow]Briefing is ~{est_tokens} tokens, over the "
+                f"{settings.briefing_token_budget} budget — sending anyway.[/yellow]"
+            )
+
+        try:
+            anthropic_client = anthropic.Anthropic(api_key=settings.anthropic_api_key or None)
+            coaching_report, usage = run_coach(anthropic_client, briefing, model=settings.model)
+        except CoachError as e:
+            console.print(f"[red]Coaching report failed: {e}[/red]")
+            console.print("[dim]Features + benchmarks were still saved.[/dim]")
+            console.print_json(json.dumps(feats_dict))
+            return
+
+        markdown = render_report(
+            coaching_report,
+            match_id=match_id,
+            hero_name=hero_name,
+            won=won,
+            played_at=view.raw.get("start_time", 0),
+            duration_s=view.duration_s,
+        )
+        db.save_report(conn, match_id, settings.model, markdown, coaching_report.model_dump(), now)
+
+    paths.reports_dir().mkdir(parents=True, exist_ok=True)
+    report_path = paths.reports_dir() / f"{view.raw.get('start_time', 0)}_{match_id}.md"
+    report_path.write_text(markdown)
+    console.print(markdown)
+    console.print(
+        f"\n[dim]Saved -> {report_path}  "
+        f"(in {usage.input_tokens} + out {usage.output_tokens} tokens)[/dim]"
+    )
 
 
 def _print_matches(entries: list[MatchHistoryEntry], assets: Assets) -> None:
