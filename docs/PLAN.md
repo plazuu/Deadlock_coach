@@ -139,11 +139,13 @@ src/limpet/
     prompt.py          ✅ micro/macro rubric + persona (see §5a on active_focus_areas)
     schema.py          ✅ CoachingReport (pydantic) + the hand-inlined REPORT_JSON_SCHEMA
     analyze.py         ✅ Anthropic call -> CoachingReport; CoachError on any failure
-    focus.py           [Phase 4] reconcile mistakes with tracked focus areas
+    focus.py           ✅ Haiku reconciles this match's report against tracked
+                       focus_areas -> active/improving/resolved + new rows
 
   report/
     markdown.py        ✅ Summary -> Micro -> Macro -> Focus this week -> Progress
-    progress.py        [Phase 4] regenerate PROGRESS.md from focus_areas/progress_snapshots
+    progress.py        ✅ regenerate PROGRESS.md in full from focus_areas +
+                       progress_snapshots (recomputed for today, each run)
   store/db.py          SQLite: index + workflow tracker, not source of truth
   cli.py               Typer app
 ```
@@ -161,9 +163,9 @@ Phase 2, `benchmark_percentile`. `MatchFeatures` is `{ micro: {...}, macro: {...
 | `limpet matches` | ✅ | List recent history |
 | `limpet fetch <id>` | ✅ | Fetch + cache one match's metadata |
 | `limpet analyze <id>` | ✅ | Parse, compute `{micro,macro}` features, attach benchmark percentiles, call Claude for a coaching report, render + save the Markdown. `--no-report` stops after features/benchmarks (no Anthropic call). |
-| `limpet backfill --last N` | Phase 4 | Ingest + analyze recent history (Batch API) |
-| `limpet report <id>` | Phase 4 | Re-render from stored data (no re-fetch, no LLM) |
-| `limpet progress` | Phase 4 | Show micro/macro trend lines + open focus areas |
+| `limpet progress` | ✅ | Show the coaching profile (`PROGRESS.md`): active/resolved focus areas, last game's strengths, the daily trend table |
+| `limpet backfill --last N` | not built | Ingest + analyze recent history (Batch API) — would also backfill historical `progress_snapshots` days, which `analyze` alone only computes for "today" |
+| `limpet report <id>` | not built | Re-render from stored data (no re-fetch, no LLM) |
 | `limpet watch` | Phase 5 | Long-running poller |
 
 ---
@@ -215,12 +217,20 @@ reconstruct from the raw payloads under `<data_dir>/cache/`.
    bottleneck. `rating` is model-estimated but benchmark-anchored — it feeds the
    trend line, not a grade. System prompt (rubric + schema) is prompt-cached; the
    briefing goes after the breakpoint.
-7. **Longitudinal** (`coach/focus.py`) — reconcile new `mistakes` against
-   `focus_areas` **within each dimension** (LLM-assisted clustering, batched),
-   advance statuses, write a `progress_snapshots` row.
+7. **Longitudinal** (`coach/focus.py`) — with nothing tracked yet, every
+   `focus_this_week` item just opens a new `focus_areas` row (no LLM call).
+   Otherwise a single `claude-haiku-4-5` call gets every tracked focus area
+   plus this match's mistakes/focus_this_week/progress_note and returns, for
+   *every* tracked item, `active` / `improving` / `resolved` (biased toward
+   `active` when unsure — one clean game isn't proof), plus any genuinely new
+   themes to start tracking. `db.update_focus_area_status` appends the match id
+   as evidence; an item the model doesn't return is left untouched rather than
+   guessed at.
 8. **Render** (`report/`) — `reports/<played_at>_<match_id>.md` with Summary →
-   Micro → Macro → Progress; `PROGRESS.md` gets the two trend lines and the open
-   focus areas grouped by dimension.
+   Micro → Macro → Focus this week → Progress; `report/progress.py` recomputes
+   *today's* `progress_snapshots` row (matches/reports already on file for
+   today, idempotent) and rewrites `PROGRESS.md` in full from `focus_areas` +
+   `progress_snapshots` — never incrementally patched.
 
 ### Auto-watch loop (`limpet watch`, Phase 5)
 
@@ -259,42 +269,52 @@ The loop, tying together pipeline steps 5–8 above:
   macro]."*
 - **The LLM's `progress_note`** (step 6) is Claude's read on whether this match
   supports each open focus area improving, stalling, or resolved.
-- **`coach/focus.py`** (step 7) reconciles new `mistakes` against existing
-  `focus_areas` by theme, advances or opens rows, writes a `progress_snapshots`
-  entry.
+- **`coach/focus.py`** (step 7) reconciles this match's report against
+  existing `focus_areas` with one cheap Haiku call (skipped entirely if
+  nothing is tracked yet), advances or opens rows.
 - **`report/progress.py`** (step 8) re-renders `PROGRESS.md` in full from the
   updated tables — it's a full regeneration each time, not an append, so it
   never drifts from what SQLite actually holds.
 
-Sketch of the rendered file:
+Actual rendered output (real match, real player, from a live run):
 
 ```markdown
-# Deadlock Progress — updated after match 105412009 (2026-09-14)
+# Deadlock Progress
 
 ## Active focus
-- **[macro] Dying isolated before 10:00** — open 6 games (since 09-02),
-  improving: 3 early deaths avg -> 1 last 3 games
-- **[micro] Low accuracy vs. mobile heroes** — open 2 games (since 09-11)
+
+- **[macro] Fight participation and objective conversion** — improving, seen in 2 game(s) since match 104738184
+- **[micro] Last-hit conversion** — active, seen in 2 game(s) since match 104738184
+- **[micro] Shot discipline** — active, seen in 2 game(s) since match 104738184
+- **[macro] Tempo from a safe lane** — active, seen in 1 game(s) since match 103317079
+- **[macro] Risk management / overcorrection** — active, seen in 1 game(s) since match 103317079
 
 ## Recently resolved
-- **[micro] Ability points dumped in the wrong order** — resolved 09-08 after
-  4 games of clean upgrade order
 
-## Solid (don't keep repeating)
-- [macro] Objective timing — consistently top-30% for your bracket
+_Nothing resolved yet._
 
-## Trend (last 10 games)
-| | this week | 10 games ago |
-|---|---|---|
-| micro rating | 62 | 54 |
-| macro rating | 58 | 61 |
-| souls/min (bench. %ile) | 71 | 48 |
+## Solid, as of the last game
+
+- 97.7th-percentile crit rate (20.1%) — your burst windows are landing hard
+- 100% of your kills involved an ability — your kit is doing the closing work
+- 13 objectives taken vs 8 lost, and 2-1 on boss objectives
+
+## Trend (daily, most recent first)
+
+| day | matches | micro avg | macro avg | benchmark %ile avg |
+|---|---|---|---|---|
+| 2026-09-12 | 2 | 66.5 | 44.0 | 51.2 |
 ```
 
-Nothing here is buildable yet — it depends on Phase 3 (an LLM to actually
-produce mistakes/`progress_note`/ratings) before there's anything real to
-reconcile. The DB tables and `paths.progress_path()` hook already exist from
-Phase 0.
+One real limitation of this design, found while verifying it live:
+`report/progress.py`'s snapshot recompute only ever touches *today*'s row
+(cheap — no need to rescan every historical day on every `analyze` call). A
+match played days or weeks ago and analyzed just now — the normal case while
+there's no `backfill`/`watch` yet — contributes to `focus_areas` immediately
+but won't show up in the Trend table until a *historical* snapshot is
+backfilled (not built) or a match is actually analyzed on the day it's
+played. Not a bug, just a gap the not-yet-built `backfill` command should
+close by recomputing every day it touches, not just today's.
 
 ---
 
@@ -322,7 +342,7 @@ Phase 0.
 | **1 — Features** ✅ | `parse/metadata.py`; `features/micro/*` + `features/macro/*` (metadata-only leaves) + `extract.py`. `limpet analyze` emits a `{micro,macro}` features JSON (no LLM). Fixture match (`tests/fixtures/match_104887482.json`) + unit tests. `waves.py` and part of `rotations.py` are honestly stubbed (`needs_demo: true`) — they need Phase 6. |
 | **2 — Benchmarks** ✅ | `features/benchmarks.py`: `GET /v1/analytics/player-stats/metrics` (hero + rank-bracket-windowed) already returns a full percentile breakdown per stat — no quantile math of our own. Only leaves with a genuine 1:1 match to an API-tracked stat get a `benchmark_percentile` (`LEAF_TO_STAT`, 8 leaves); everything else is left alone rather than forced. |
 | **3 — Coach** ✅ | `coach/{briefing,prompt,schema,analyze}.py`, `report/markdown.py`. `limpet analyze <id>` writes the Summary/Micro/Macro/Focus/Progress Markdown report. Schema is hand-inlined JSON (no `$ref`/`$defs`) validated against `CoachingReport`; `active_focus_areas` in the briefing and `db.active_focus_areas()` are wired but empty until Phase 4 populates them. Unit-tested against a fake Anthropic client — no real API calls in the test suite. |
-| **4 — Longitudinal** | `focus_areas` (with `dimension`) + `progress_snapshots`, `coach/focus.py`, `report/progress.py`, `limpet progress` / `backfill` / `report`. |
+| **4 — Longitudinal** ✅ | `coach/focus.py` (Haiku reconciliation against `focus_areas`), `report/progress.py` (recompute today's `progress_snapshots` row + full re-render), `limpet progress`. Verified live: a real match opened 3 focus areas, a second real match advanced one to `improving` and opened 2 more. `limpet backfill` / `limpet report` (re-render without re-analyzing) not built — see the Trend-table gap noted in §5a. |
 | **5 — Auto-watch** | `limpet watch`: poller, notifications, daily digest, restart-safe queue. |
 | **6 — Replays (stretch)** | `parse/demo.py` over the hosted demo-query API; fill the "needs the demo query" leaves (cast-level abilities, wave management, precise rotations). |
 

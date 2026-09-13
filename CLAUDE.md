@@ -7,8 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Limpet is a local, single-user AI coach for the game Deadlock. It pulls the
 user's match data from the [deadlock-api.com](https://api.deadlock-api.com)
 community API, extracts performance features, benchmarks them against players at
-the same rank, and (not yet built) has Claude write per-game coaching reports
-that track recurring weaknesses over time.
+the same rank, has Claude write per-game coaching reports, and tracks recurring
+weaknesses across matches so the feedback compounds over time.
 
 - **`docs/PLAN.md`** — full design and phased roadmap. Read this before starting
   any non-trivial feature; it defines the module layout the codebase is growing into.
@@ -16,15 +16,16 @@ that track recurring weaknesses over time.
   limits, and the `match_info` schema. Trust this over guessing; re-verify against
   `https://api.deadlock-api.com/openapi.json` if something looks off.
 
-Current state: Phases 0–3. Implemented = API client, config, asset cache, SQLite
+Current state: Phases 0–4. Implemented = API client, config, asset cache, SQLite
 store, `parse/metadata.py`, `features/{micro,macro}/*` + `extract.py` +
-`benchmarks.py`, `coach/{briefing,prompt,schema,analyze}.py`,
-`report/markdown.py`, and the full `init/whoami/sync/matches/fetch/analyze` CLI.
-`limpet analyze <id>` now produces a real coaching report (Anthropic key
-required — `ANTHROPIC_API_KEY` or `LIMPET_ANTHROPIC_API_KEY`; `--no-report`
-stops after features/benchmarks if you don't have one configured). Not yet
-built = `coach/focus.py`, `report/progress.py` (Phase 4), the `watch` poller
-(Phase 5).
+`benchmarks.py`, `coach/{briefing,prompt,schema,analyze,focus}.py`,
+`report/{markdown,progress}.py`, and the full
+`init/whoami/sync/matches/fetch/analyze/progress` CLI. `limpet analyze <id>`
+produces a coaching report, reconciles it against tracked `focus_areas`, and
+regenerates `PROGRESS.md` (Anthropic key required — `ANTHROPIC_API_KEY` or
+`LIMPET_ANTHROPIC_API_KEY`; `--no-report` stops after features/benchmarks if
+you don't have one configured). Not yet built = the `watch` poller (Phase 5),
+`backfill`/`report` commands.
 
 **Organizing principle: micro and macro.** Every feature, coaching observation,
 focus area, and drill is tagged `micro` (mechanical execution — CS, aim,
@@ -35,12 +36,19 @@ column, and the progress trend lines are all split this way. See PLAN.md §1 for
 the sub-dimension rubric. When building `features/` or `coach/`, keep the two
 pillars separate end to end.
 
-**Long-term memory (Phase 3+, not yet built):** PLAN.md §5a. Same raw/derived
-split as everywhere else in this codebase — SQLite (`focus_areas`,
-`progress_snapshots`) is the only thing ever written to; `PROGRESS.md` is a
-full re-render of it after every match, never hand-edited, whose job is to
-feed back into the *next* match's briefing so the coach has continuity. Read
-§5a before touching `coach/focus.py` or `report/progress.py`.
+**Long-term memory:** PLAN.md §5a. Same raw/derived split as everywhere else in
+this codebase — SQLite (`focus_areas`, `progress_snapshots`) is the only thing
+ever written to; `PROGRESS.md` is a full re-render of it after every match,
+never hand-edited, whose job is to feed back into the *next* match's briefing
+(via `db.active_focus_areas()`) so the coach has continuity. `coach/focus.py`
+matches this match's report against tracked themes with a cheap Haiku call
+(skipped when nothing's tracked yet) rather than string equality — free-text
+themes reword the same underlying issue across matches. Known gap: PROGRESS.md's
+trend table only gets a day's row computed when a match is *analyzed on the
+day it's played* (`report/progress.py` only recomputes "today" each run, by
+design — cheap, and correct once `watch` exists) — analyzing old matches
+backfills `focus_areas` but not historical trend rows. Read §5a before
+touching `coach/focus.py` or `report/progress.py`.
 
 ## Commands
 

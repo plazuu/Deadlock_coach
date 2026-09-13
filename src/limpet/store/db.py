@@ -186,14 +186,76 @@ def save_report(
 
 
 def active_focus_areas(conn: sqlite3.Connection, limit: int = 10) -> list[sqlite3.Row]:
-    """Focus areas still being worked on, most recently touched first.
-
-    Empty until `coach/focus.py` (Phase 4) exists to populate `focus_areas` —
-    wired now so the briefing's `active_focus_areas` slot is real from the
-    start rather than a placeholder to revisit later.
-    """
+    """Focus areas still being worked on, most recently touched first."""
     return conn.execute(
         "SELECT * FROM focus_areas WHERE status IN ('active', 'improving') "
         "ORDER BY updated_at DESC LIMIT ?",
         (limit,),
     ).fetchall()
+
+
+def all_focus_areas(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute("SELECT * FROM focus_areas ORDER BY updated_at DESC").fetchall()
+
+
+def open_focus_area(
+    conn: sqlite3.Connection, match_id: int, dimension: str, theme: str, now: int
+) -> int:
+    """Start tracking a new theme. Returns the new row's id."""
+    cur = conn.execute(
+        "INSERT INTO focus_areas "
+        "(dimension, theme, status, first_seen_match, last_seen_match, "
+        " evidence_match_ids, created_at, updated_at) "
+        "VALUES (?, ?, 'active', ?, ?, ?, ?, ?)",
+        (dimension, theme, match_id, match_id, json.dumps([match_id]), now, now),
+    )
+    return cur.lastrowid
+
+
+def update_focus_area_status(
+    conn: sqlite3.Connection, focus_area_id: int, status: str, match_id: int, now: int
+) -> None:
+    """Advance a tracked focus area's status and append this match as evidence."""
+    row = conn.execute(
+        "SELECT evidence_match_ids FROM focus_areas WHERE id = ?", (focus_area_id,)
+    ).fetchone()
+    if row is None:
+        return
+    evidence = json.loads(row["evidence_match_ids"])
+    if match_id not in evidence:
+        evidence.append(match_id)
+    conn.execute(
+        "UPDATE focus_areas SET status = ?, last_seen_match = ?, "
+        "evidence_match_ids = ?, updated_at = ? WHERE id = ?",
+        (status, match_id, json.dumps(evidence), now, focus_area_id),
+    )
+
+
+def upsert_progress_snapshot(conn: sqlite3.Connection, day: str, metrics: dict[str, Any]) -> None:
+    conn.execute(
+        "INSERT INTO progress_snapshots (day, metrics_json) VALUES (?, ?) "
+        "ON CONFLICT(day) DO UPDATE SET metrics_json = excluded.metrics_json",
+        (day, json.dumps(metrics)),
+    )
+
+
+def recent_snapshots(conn: sqlite3.Connection, limit: int = 10) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM progress_snapshots ORDER BY day DESC LIMIT ?", (limit,)
+    ).fetchall()
+
+
+def reports_with_context(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """The latest report per match, joined with its play time and features —
+    the raw material `report/progress.py` groups by day to build snapshots."""
+    return conn.execute(
+        "SELECT r.match_id, r.structured_json, m.played_at, f.features_json "
+        "FROM reports r "
+        "JOIN matches m ON m.match_id = r.match_id "
+        "LEFT JOIN match_features f ON f.match_id = r.match_id "
+        "WHERE r.id IN (SELECT MAX(id) FROM reports GROUP BY match_id)"
+    ).fetchall()
+
+
+def latest_report(conn: sqlite3.Connection) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM reports ORDER BY id DESC LIMIT 1").fetchone()

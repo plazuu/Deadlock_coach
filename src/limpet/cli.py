@@ -8,6 +8,7 @@ Phase 0/1 surface:
   limpet fetch <match_id>     fetch + cache full match metadata
   limpet sync                 pull match history into the local db
   limpet analyze <match_id>   features + benchmarks + (with a key) a coaching report
+  limpet progress             show the running coaching profile (PROGRESS.md)
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from typing import Annotated
 import anthropic
 import typer
 from rich.console import Console
+from rich.markdown import Markdown
 from rich.table import Table
 
 from . import paths
@@ -29,6 +31,7 @@ from .coach.analyze import CoachError
 from .coach.analyze import analyze_match as run_coach
 from .coach.briefing import build as build_briefing
 from .coach.briefing import estimate_tokens
+from .coach.focus import reconcile as reconcile_focus_areas
 from .config import Settings, load_settings, write_config
 from .features.benchmarks import attach as attach_benchmarks
 from .features.benchmarks import fetch_hero_distributions
@@ -44,6 +47,7 @@ from .ingest import (
 from .parse.metadata import PlayerNotInMatch
 from .parse.metadata import load as load_match
 from .report.markdown import render as render_report
+from .report.progress import regenerate as regenerate_progress
 from .store import db
 
 app = typer.Typer(add_completion=False, help="A local AI coach for Deadlock.")
@@ -295,14 +299,31 @@ def analyze(
         )
         db.save_report(conn, match_id, settings.model, markdown, coaching_report.model_dump(), now)
 
+        try:
+            reconcile_focus_areas(anthropic_client, conn, match_id, coaching_report, now)
+        except CoachError as e:
+            console.print(f"[yellow]Focus-area tracking skipped this match: {e}[/yellow]")
+        regenerate_progress(conn)
+
     paths.reports_dir().mkdir(parents=True, exist_ok=True)
     report_path = paths.reports_dir() / f"{view.raw.get('start_time', 0)}_{match_id}.md"
     report_path.write_text(markdown)
     console.print(markdown)
     console.print(
         f"\n[dim]Saved -> {report_path}  "
-        f"(in {usage.input_tokens} + out {usage.output_tokens} tokens)[/dim]"
+        f"(in {usage.input_tokens} + out {usage.output_tokens} tokens) "
+        f"-- progress -> {paths.progress_path()}[/dim]"
     )
+
+
+@app.command()
+def progress() -> None:
+    """Show the running coaching profile (regenerated after every `analyze`)."""
+    path = paths.progress_path()
+    if not path.exists():
+        console.print("[dim]No progress tracked yet — run `limpet analyze <match_id>` first.[/dim]")
+        return
+    console.print(Markdown(path.read_text()))
 
 
 def _print_matches(entries: list[MatchHistoryEntry], assets: Assets) -> None:
