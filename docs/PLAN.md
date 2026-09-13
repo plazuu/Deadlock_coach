@@ -227,6 +227,74 @@ notification + a line in `digests/YYYY-MM-DD.md`. Restart-safe (queue in SQLite)
 
 ---
 
+## 5a. Long-term memory: the coaching profile
+
+This is what makes it a *coach* rather than a per-match report generator: it
+needs to remember what it already told you and check back on it. Two layers,
+same "raw/derived" split the rest of the codebase already uses (CLAUDE.md
+§Source-of-truth rule) — never one file trying to be both:
+
+1. **SQLite is the durable, structured store — the only thing ever written to.**
+   `focus_areas` (one row per recurring theme, `dimension` micro/macro, `status`
+   `active → improving → resolved`, `evidence_match_ids`) and
+   `progress_snapshots` (rolling metrics per day). Queryable, joinable to
+   specific matches, safe to update from every `analyze` run.
+2. **`PROGRESS.md` is a rendered *view*, regenerated from SQLite after every
+   match — never hand-edited, never the thing anything reads state from.** Its
+   job is to be the compact context that goes back into the *next* match's
+   briefing (so the model has continuity) and the page you open yourself to see
+   "how am I doing." Same reason this repo keeps raw API payloads as the source
+   of truth and treats the DB as derived — and structurally the same trick
+   CLAUDE.md/MEMORY.md use for *my* memory: a durable store underneath, a
+   compact rendered summary that actually gets read each time.
+
+The loop, tying together pipeline steps 5–8 above:
+
+- **Before analyzing** a match, `coach/briefing.py` pulls current `active`/
+  `improving` focus areas straight from SQLite (not the .md) and puts a short
+  summary in the briefing: *"Focus areas coming into this game: [2 micro, 1
+  macro]."*
+- **The LLM's `progress_note`** (step 6) is Claude's read on whether this match
+  supports each open focus area improving, stalling, or resolved.
+- **`coach/focus.py`** (step 7) reconciles new `mistakes` against existing
+  `focus_areas` by theme, advances or opens rows, writes a `progress_snapshots`
+  entry.
+- **`report/progress.py`** (step 8) re-renders `PROGRESS.md` in full from the
+  updated tables — it's a full regeneration each time, not an append, so it
+  never drifts from what SQLite actually holds.
+
+Sketch of the rendered file:
+
+```markdown
+# Deadlock Progress — updated after match 105412009 (2026-09-14)
+
+## Active focus
+- **[macro] Dying isolated before 10:00** — open 6 games (since 09-02),
+  improving: 3 early deaths avg -> 1 last 3 games
+- **[micro] Low accuracy vs. mobile heroes** — open 2 games (since 09-11)
+
+## Recently resolved
+- **[micro] Ability points dumped in the wrong order** — resolved 09-08 after
+  4 games of clean upgrade order
+
+## Solid (don't keep repeating)
+- [macro] Objective timing — consistently top-30% for your bracket
+
+## Trend (last 10 games)
+| | this week | 10 games ago |
+|---|---|---|
+| micro rating | 62 | 54 |
+| macro rating | 58 | 61 |
+| souls/min (bench. %ile) | 71 | 48 |
+```
+
+Nothing here is buildable yet — it depends on Phase 3 (an LLM to actually
+produce mistakes/`progress_note`/ratings) before there's anything real to
+reconcile. The DB tables and `paths.progress_path()` hook already exist from
+Phase 0.
+
+---
+
 ## 6. LLM usage notes
 
 - **Model:** `claude-opus-5`, adaptive thinking, structured outputs via

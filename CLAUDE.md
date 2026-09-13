@@ -33,6 +33,13 @@ column, and the progress trend lines are all split this way. See PLAN.md §1 for
 the sub-dimension rubric. When building `features/` or `coach/`, keep the two
 pillars separate end to end.
 
+**Long-term memory (Phase 3+, not yet built):** PLAN.md §5a. Same raw/derived
+split as everywhere else in this codebase — SQLite (`focus_areas`,
+`progress_snapshots`) is the only thing ever written to; `PROGRESS.md` is a
+full re-render of it after every match, never hand-edited, whose job is to
+feed back into the *next* match's briefing so the coach has continuity. Read
+§5a before touching `coach/focus.py` or `report/progress.py`.
+
 ## Commands
 
 The host has Python 3.14 and **no uv/poetry** — a plain venv at `.venv`. Use the
