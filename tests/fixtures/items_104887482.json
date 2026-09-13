@@ -1,0 +1,142 @@
+{
+ "3452399392": {
+  "id": 3452399392,
+  "name": "Rain of Arrows",
+  "type": "ability",
+  "item_tier": null,
+  "cost": null
+ },
+ "3077079169": {
+  "id": 3077079169,
+  "name": "High-Velocity Rounds",
+  "type": "upgrade",
+  "item_tier": 1,
+  "cost": 800
+ },
+ "548943648": {
+  "id": 548943648,
+  "name": "Charged Shot",
+  "type": "ability",
+  "item_tier": null,
+  "cost": null
+ },
+ "512733154": {
+  "id": 512733154,
+  "name": "Spirit Snare",
+  "type": "ability",
+  "item_tier": null,
+  "cost": null
+ },
+ "2064029594": {
+  "id": 2064029594,
+  "name": "Opening Rounds",
+  "type": "upgrade",
+  "item_tier": 2,
+  "cost": 1600
+ },
+ "668299740": {
+  "id": 668299740,
+  "name": "Rapid Rounds",
+  "type": "upgrade",
+  "item_tier": 1,
+  "cost": 800
+ },
+ "4104549924": {
+  "id": 4104549924,
+  "name": "Swift Striker",
+  "type": "upgrade",
+  "item_tier": 2,
+  "cost": 1600
+ },
+ "3242902780": {
+  "id": 3242902780,
+  "name": "Guided Owl",
+  "type": "ability",
+  "item_tier": null,
+  "cost": null
+ },
+ "395867183": {
+  "id": 395867183,
+  "name": "Mystic Shot",
+  "type": "upgrade",
+  "item_tier": 2,
+  "cost": 1600
+ },
+ "4139877411": {
+  "id": 4139877411,
+  "name": "Extra Stamina",
+  "type": "upgrade",
+  "item_tier": 1,
+  "cost": 800
+ },
+ "1998374645": {
+  "id": 1998374645,
+  "name": "Mystic Burst",
+  "type": "upgrade",
+  "item_tier": 1,
+  "cost": 800
+ },
+ "3776945997": {
+  "id": 3776945997,
+  "name": "Extra Charge",
+  "type": "upgrade",
+  "item_tier": 1,
+  "cost": 800
+ },
+ "2121044373": {
+  "id": 2121044373,
+  "name": "Tankbuster",
+  "type": "upgrade",
+  "item_tier": 3,
+  "cost": 3200
+ },
+ "334300056": {
+  "id": 334300056,
+  "name": "Stamina Mastery",
+  "type": "upgrade",
+  "item_tier": 3,
+  "cost": 3200
+ },
+ "3970837787": {
+  "id": 3970837787,
+  "name": "Enchanter's Emblem",
+  "type": "upgrade",
+  "item_tier": 2,
+  "cost": 1600
+ },
+ "7409189": {
+  "id": 7409189,
+  "name": "Improved Spirit",
+  "type": "upgrade",
+  "item_tier": 2,
+  "cost": 1600
+ },
+ "787198704": {
+  "id": 787198704,
+  "name": "Rapid Recharge",
+  "type": "upgrade",
+  "item_tier": 3,
+  "cost": 3200
+ },
+ "3261353684": {
+  "id": 3261353684,
+  "name": "Superior Cooldown",
+  "type": "upgrade",
+  "item_tier": 3,
+  "cost": 3200
+ },
+ "1763073141": {
+  "id": 1763073141,
+  "name": "Recharging Rush",
+  "type": "upgrade",
+  "item_tier": 2,
+  "cost": 1600
+ },
+ "2951612397": {
+  "id": 2951612397,
+  "name": "Duration Extender",
+  "type": "upgrade",
+  "item_tier": 2,
+  "cost": 1600
+ }
+}

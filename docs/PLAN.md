@@ -120,18 +120,19 @@ src/limpet/
     client.py          the ONLY file that knows deadlock-api URL shapes
     models.py          typed models for stable responses; metadata stays raw dict
 
-  ingest.py            match-history sync + raw metadata fetch/cache
+  ingest.py            match-history sync + raw metadata fetch/cache;
+                       upsert_from_metadata() derives a `matches` row without a prior sync
 
-  parse/               [Phase 1] resolve our player slot; typed views of match_info
-    metadata.py
+  parse/               resolve our player slot; typed, defensive views of match_info
+    metadata.py        ✅ MatchView: player()/teammates()/enemies()/average_badge()
     demo.py            [Phase 6] shape demo-query results
 
-  features/            [Phase 1] deterministic, unit-tested feature extraction
-    common.py          game-phase windows (lane / mid / late), curve + benchmark helpers
-    micro/             lasthits.py  aim.py  abilities.py  trades.py  fights.py  survival.py
-    macro/             economy.py  waves.py  rotations.py  objectives.py  awareness.py  itemization.py
+  features/            deterministic, unit-tested feature extraction
+    common.py          ✅ Leaf record, phase windows, safe_ratio/per_min/euclidean helpers
+    micro/             ✅ lasthits.py  aim.py  abilities.py  trades.py  fights.py  survival.py
+    macro/             ✅ economy.py  objectives.py  rotations.py  awareness.py  itemization.py  waves.py
     benchmarks.py      [Phase 2] attach rank-bracket percentile to each leaf
-    extract.py         orchestrator -> MatchFeatures { micro: {...}, macro: {...} }
+    extract.py         ✅ orchestrator -> MatchFeatures { micro: {...}, macro: {...} }
 
   coach/               [Phase 3]
     briefing.py        token-bounded structured briefing (never raw metadata)
@@ -156,7 +157,7 @@ Phase 2, `benchmark_percentile`. `MatchFeatures` is `{ micro: {...}, macro: {...
 | `limpet sync` | ✅ | Pull match history into the local db |
 | `limpet matches` | ✅ | List recent history |
 | `limpet fetch <id>` | ✅ | Fetch + cache one match's metadata |
-| `limpet analyze <id>` | Phase 3 | Run the full pipeline, write the report |
+| `limpet analyze <id>` | ✅ (features only) | Parse + compute `{micro,macro}` features, save + print JSON. No LLM call yet — that's Phase 3. |
 | `limpet backfill --last N` | Phase 4 | Ingest + analyze recent history (Batch API) |
 | `limpet report <id>` | Phase 4 | Re-render from stored data (no re-fetch, no LLM) |
 | `limpet progress` | Phase 4 | Show micro/macro trend lines + open focus areas |
@@ -247,7 +248,7 @@ notification + a line in `digests/YYYY-MM-DD.md`. Restart-safe (queue in SQLite)
 | Phase | Deliverable |
 |---|---|
 | **0 — Scaffold** ✅ | API client, config, asset cache, SQLite store, `init/whoami/sync/matches/fetch`. |
-| **1 — Features** | `parse/metadata.py`; `features/micro/*` + `features/macro/*` (metadata-only leaves) + `extract.py`. `limpet analyze` emits a `{micro,macro}` features JSON (no LLM). Committed fixture matches + unit tests. |
+| **1 — Features** ✅ | `parse/metadata.py`; `features/micro/*` + `features/macro/*` (metadata-only leaves) + `extract.py`. `limpet analyze` emits a `{micro,macro}` features JSON (no LLM). Fixture match (`tests/fixtures/match_104887482.json`) + unit tests. `waves.py` and part of `rotations.py` are honestly stubbed (`needs_demo: true`) — they need Phase 6. |
 | **2 — Benchmarks** | `features/benchmarks.py`: rank-bracket percentile on every leaf. |
 | **3 — Coach** | `coach/{briefing,prompt,analyze}.py`, `report/markdown.py`. `limpet analyze <id>` writes the two-section Markdown report. |
 | **4 — Longitudinal** | `focus_areas` (with `dimension`) + `progress_snapshots`, `coach/focus.py`, `report/progress.py`, `limpet progress` / `backfill` / `report`. |

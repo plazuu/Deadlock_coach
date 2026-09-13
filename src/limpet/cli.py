@@ -7,10 +7,13 @@ Phase 0/1 surface:
   limpet matches [--limit N]  list recent match history
   limpet fetch <match_id>     fetch + cache full match metadata
   limpet sync                 pull match history into the local db
+  limpet analyze <match_id>   compute micro/macro features for one match (no LLM yet)
 """
 
 from __future__ import annotations
 
+import json
+import time
 from typing import Annotated
 
 import typer
@@ -22,8 +25,17 @@ from .api.client import DeadlockAPIError, DeadlockClient, MetadataNotReady
 from .api.models import MatchHistoryEntry, PlayerRank
 from .assets import Assets
 from .config import Settings, load_settings, write_config
+from .features.extract import extract as extract_features
 from .ids import InvalidSteamID, to_account_id, to_steamid64
-from .ingest import ingest_match, sync_match_history
+from .ingest import (
+    cached_metadata,
+    fetch_metadata,
+    ingest_match,
+    sync_match_history,
+    upsert_from_metadata,
+)
+from .parse.metadata import PlayerNotInMatch
+from .parse.metadata import load as load_match
 from .store import db
 
 app = typer.Typer(add_completion=False, help="A local AI coach for Deadlock.")
@@ -172,6 +184,48 @@ def fetch(
             console.print(f"[red]{e}[/red]")
             raise typer.Exit(1) from e
     console.print(f"[green]Cached[/green] -> {path}")
+
+
+@app.command()
+def analyze(
+    match_id: Annotated[int, typer.Argument(help="Match id to analyze.")],
+) -> None:
+    """Compute micro/macro features for one match. No LLM call yet (Phase 3)."""
+    settings = load_settings()
+    account_id = _require_account(settings)
+    meta = cached_metadata(match_id)
+    with _client(settings) as client, db.session() as conn:
+        if meta is None:
+            try:
+                meta, _path = fetch_metadata(client, match_id)
+            except MetadataNotReady as e:
+                console.print(f"[yellow]{e}[/yellow] Try again in a few minutes.")
+                raise typer.Exit(2) from e
+            except DeadlockAPIError as e:
+                console.print(f"[red]{e}[/red]")
+                raise typer.Exit(1) from e
+
+        try:
+            # Upserts a base `matches` row from the metadata itself, so `analyze`
+            # works standalone without a prior `sync` (e.g. on a friend's match).
+            upsert_from_metadata(conn, meta, account_id)
+        except PlayerNotInMatch as e:
+            console.print(f"[red]{e}[/red]")
+            raise typer.Exit(1) from e
+
+        now = int(time.time())
+        raw_path = paths.match_cache_dir(match_id) / "metadata.json"
+        conn.execute(
+            "UPDATE matches SET raw_meta_path = ?, ingested_at = ? WHERE match_id = ?",
+            (str(raw_path), now, match_id),
+        )
+
+        view = load_match(meta)
+        features = extract_features(view, account_id, Assets(client))
+        db.save_features(conn, match_id, features.to_dict(), None, now)
+        conn.execute("UPDATE matches SET analyzed_at = ? WHERE match_id = ?", (now, match_id))
+
+    console.print_json(json.dumps(features.to_dict()))
 
 
 def _print_matches(entries: list[MatchHistoryEntry], assets: Assets) -> None:

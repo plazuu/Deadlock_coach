@@ -12,6 +12,12 @@ raw payloads.
 - Analytics endpoints share a pool: 200 req/min (IP) / 400 (key) / 2000 (global).
 - `match-history` with `force_refetch=true` and the `salts` Steam fallback are
   heavily limited (≈1–10 req/hour) — only used opportunistically.
+- **`GET /v1/matches/{id}/metadata` is IP-limited to 3 req/hour without an API
+  key** (observed 2026-09-12: `429` with `{"quota":{"limit":3,"period":3600}}`).
+  This is much tighter than the analytics pool and hits fast during dev —
+  `ingest.cached_metadata()` / `limpet analyze`'s cache-first check exists partly
+  because of this. Get a free key (deadlock-api Discord) before doing any bulk
+  `fetch`/`analyze` work; re-verify the with-key limit when one is configured.
 - Analytics responses are cached server-side 1–6h per unique query.
 
 ## Endpoints Limpet uses

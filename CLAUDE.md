@@ -16,9 +16,12 @@ that track recurring weaknesses over time.
   limits, and the `match_info` schema. Trust this over guessing; re-verify against
   `https://api.deadlock-api.com/openapi.json` if something looks off.
 
-Current state: Phase 0 + the ingest slice of Phase 1. Implemented = API client,
-config, asset cache, SQLite store, and the `init/whoami/sync/matches/fetch` CLI.
-Not yet built = `parse/`, `features/`, `coach/`, `report/`, the `watch` poller.
+Current state: Phases 0–1. Implemented = API client, config, asset cache, SQLite
+store, `parse/metadata.py`, `features/{micro,macro}/*` + `extract.py`, and the
+`init/whoami/sync/matches/fetch/analyze` CLI. `analyze` computes and prints
+`{micro,macro}` features but does not call an LLM yet — no Anthropic key is
+required for anything that exists today. Not yet built = `features/benchmarks.py`
+(Phase 2), `coach/`, `report/` (Phase 3+), the `watch` poller (Phase 5).
 
 **Organizing principle: micro and macro.** Every feature, coaching observation,
 focus area, and drill is tagged `micro` (mechanical execution — CS, aim,
@@ -75,9 +78,37 @@ api/models.py   pydantic models for the few well-specified responses
                 changes with patches.
 assets.py       hero/item/rank id→name lookups, disk-cached with a TTL.
 ingest.py       fetch + persist: match-history sync, raw metadata → cache/.
+                upsert_from_metadata() derives a matches row without a prior sync.
+parse/metadata.py   MatchView: resolves our player slot, teammates/enemies,
+                    average_badge. Thin and defensive — match_info isn't modeled.
+features/*.py   micro/ and macro/ leaf modules (see the organizing principle
+                above) -> features/extract.py -> MatchFeatures{micro, macro}.
+                Each leaf degrades gracefully (value=None + note, or
+                needs_demo=True) instead of guessing when data isn't available
+                from match_info alone.
 store/db.py     SQLite. An index and workflow tracker, NOT the source of truth.
 cli.py          Typer app. Thin — delegates to the modules above.
 ```
+
+### Feature leaves
+
+A `Leaf` (`features/common.py`) is one coaching-relevant observation:
+`{key, dimension, sub_dimension, value, unit, needs_demo, note}`. Leaf functions
+take raw `player` dicts (a `match_info.players[]` entry) plus whatever else they
+need (`duration_s`, an `Assets` instance, `MatchView`) — never the whole
+`MatchView` for player-level leaves, to keep them unit-testable in isolation.
+`features/extract.py` is the only place that buckets leaves into
+`{micro: {sub_dimension: {key: {...}}}, macro: {...}}`. When a signal genuinely
+isn't computable from `match_info` (e.g. wave management), return a leaf with
+`value=None, needs_demo=True` and a `note` — don't approximate with a weak proxy
+and call it good.
+
+`tests/fixtures/match_104887482.json` is a real, complete match payload (a
+public leaderboard account, not the project owner's) committed for
+fixture-based feature tests; `tests/fixtures/items_104887482.json` is a small
+offline lookup (id → name/type/tier/cost) for the exact items that match's
+player bought, used by `tests/test_features.py`'s `FakeAssets` so those tests
+need no network.
 
 ### Source-of-truth rule
 

@@ -10,6 +10,7 @@ from pathlib import Path
 from . import paths
 from .api.client import DeadlockClient
 from .api.models import MatchHistoryEntry
+from .parse.metadata import load as load_match
 from .store import db
 
 
@@ -59,6 +60,14 @@ def _history_row(e: MatchHistoryEntry) -> dict:
     }
 
 
+def cached_metadata(match_id: int) -> dict | None:
+    """Read previously-fetched metadata from disk without hitting the API."""
+    path = paths.match_cache_dir(match_id) / "metadata.json"
+    if path.exists():
+        return json.loads(path.read_text())
+    return None
+
+
 def fetch_metadata(client: DeadlockClient, match_id: int) -> tuple[dict, Path]:
     """Fetch full match metadata and cache it. Raises ``MetadataNotReady`` if pending."""
     meta = client.match_metadata(match_id)
@@ -78,3 +87,39 @@ def ingest_match(client: DeadlockClient, conn: sqlite3.Connection, match_id: int
     )
     conn.commit()
     return path
+
+
+def upsert_from_metadata(conn: sqlite3.Connection, meta: dict, account_id: int) -> None:
+    """Upsert a `matches` row derived straight from full metadata.
+
+    Unlike `_history_row` (from `/match-history`), this doesn't need a prior
+    `sync` — `analyze` can run standalone on any match id. Raises
+    `PlayerNotInMatch` if `account_id` didn't play in this match. Leaves
+    `raw_meta_path`/`ingested_at`/`demo_path`/`analyzed_at` untouched by the
+    caller's own follow-up updates (this only sets scoreboard-derived fields).
+    """
+    view = load_match(meta)
+    player = view.player(account_id)  # raises PlayerNotInMatch
+    won = view.winning_team is not None and player.get("team") == view.winning_team
+    db.upsert_match(
+        conn,
+        {
+            "match_id": view.match_id,
+            "account_id": account_id,
+            "played_at": view.raw.get("start_time", 0),
+            "hero_id": player.get("hero_id", 0),
+            "won": int(won),
+            "abandoned": int(bool(player.get("abandon_match_time_s"))),
+            "duration_s": view.duration_s,
+            "match_mode": view.raw.get("match_mode", 0),
+            "kills": player.get("kills"),
+            "deaths": player.get("deaths"),
+            "assists": player.get("assists"),
+            "net_worth": player.get("net_worth"),
+            "average_badge": view.average_badge(account_id),
+            "raw_meta_path": None,
+            "demo_path": None,
+            "ingested_at": None,
+            "analyzed_at": None,
+        },
+    )
