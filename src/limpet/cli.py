@@ -48,14 +48,11 @@ def _require_account(settings: Settings) -> int:
 def init(
     steam_id: Annotated[str, typer.Option(prompt="Your Steam ID / SteamID64 / profile URL")],
     deadlock_api_key: Annotated[
-        str, typer.Option(prompt="deadlock-api.com API key (blank to skip)", default="")
+        str, typer.Option(prompt="deadlock-api.com API key (blank to skip)")
     ] = "",
     anthropic_api_key: Annotated[
         str,
-        typer.Option(
-            prompt="Anthropic API key (blank = use ANTHROPIC_API_KEY / ant auth)",
-            default="",
-        ),
+        typer.Option(prompt="Anthropic API key (blank = use ANTHROPIC_API_KEY / ant auth)"),
     ] = "",
 ) -> None:
     """Write configuration, verify API access, and cache static assets."""
