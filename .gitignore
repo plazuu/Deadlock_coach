@@ -2,18 +2,36 @@
 __pycache__/
 *.py[cod]
 .venv/
+venv/
 *.egg-info/
 build/
 dist/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
 
-# Limpet local data (raw API payloads, SQLite db, generated reports)
+# Limpet local data (raw API payloads, SQLite db, generated reports) — the
+# default data dir lives outside the repo, but these are a safety net in case
+# LIMPET_DATA_DIR ever points somewhere under here.
 /data/
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
 *.sqlite3
 
-# Secrets
+# Secrets / local env — keep .env.example tracked
 .env
+.env.*
+!.env.example
 config.json
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
