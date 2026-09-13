@@ -1,0 +1,208 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+Limpet is a local, single-user AI coach for the game Deadlock. It pulls the
+user's match data from the [deadlock-api.com](https://api.deadlock-api.com)
+community API, extracts performance features, benchmarks them against players at
+the same rank, has Claude write per-game coaching reports, and tracks recurring
+weaknesses across matches so the feedback compounds over time.
+
+- **`docs/PLAN.md`** — full design and phased roadmap. Read this before starting
+  any non-trivial feature; it defines the module layout the codebase is growing into.
+- **`docs/api-notes.md`** — verified deadlock-api.com endpoint shapes, auth, rate
+  limits, and the `match_info` schema. Trust this over guessing; re-verify against
+  `https://api.deadlock-api.com/openapi.json` if something looks off.
+
+Current state: Phases 0–4. Implemented = API client, config, asset cache, SQLite
+store, `parse/metadata.py`, `features/{micro,macro}/*` + `extract.py` +
+`benchmarks.py`, `coach/{briefing,prompt,schema,analyze,focus}.py`,
+`report/{markdown,progress}.py`, and the full
+`init/whoami/sync/matches/fetch/analyze/progress` CLI. `limpet analyze <id>`
+produces a coaching report, reconciles it against tracked `focus_areas`, and
+regenerates `PROGRESS.md` (Anthropic key required — `ANTHROPIC_API_KEY` or
+`LIMPET_ANTHROPIC_API_KEY`; `--no-report` stops after features/benchmarks if
+you don't have one configured). Not yet built = the `watch` poller (Phase 5),
+`backfill`/`report` commands.
+
+**Organizing principle: micro and macro.** Every feature, coaching observation,
+focus area, and drill is tagged `micro` (mechanical execution — CS, aim,
+abilities, fights, dodging) or `macro` (map-level decisions — farm routing,
+rotations, objectives, itemization timing, getting caught). The report, the
+`match_features` JSON (`{micro:{…}, macro:{…}}`), the `focus_areas.dimension`
+column, and the progress trend lines are all split this way. See PLAN.md §1 for
+the sub-dimension rubric. When building `features/` or `coach/`, keep the two
+pillars separate end to end.
+
+**Long-term memory:** PLAN.md §5a. Same raw/derived split as everywhere else in
+this codebase — SQLite (`focus_areas`, `progress_snapshots`) is the only thing
+ever written to; `PROGRESS.md` is a full re-render of it after every match,
+never hand-edited, whose job is to feed back into the *next* match's briefing
+(via `db.active_focus_areas()`) so the coach has continuity. `coach/focus.py`
+matches this match's report against tracked themes with a cheap Haiku call
+(skipped when nothing's tracked yet) rather than string equality — free-text
+themes reword the same underlying issue across matches. Known gap: PROGRESS.md's
+trend table only gets a day's row computed when a match is *analyzed on the
+day it's played* (`report/progress.py` only recomputes "today" each run, by
+design — cheap, and correct once `watch` exists) — analyzing old matches
+backfills `focus_areas` but not historical trend rows. Read §5a before
+touching `coach/focus.py` or `report/progress.py`.
+
+## Commands
+
+The host has Python 3.14 and **no uv/poetry** — a plain venv at `.venv`. Use the
+Makefile (`make help` lists all targets):
+
+```sh
+make install                      # python3 -m venv .venv + pip install -e ".[dev]"
+make test                         # pytest
+make lint                         # ruff check + ruff format --check
+make fmt                          # ruff check --fix + ruff format
+make check                        # lint + test  (run before committing)
+make run ARGS="matches --limit 5" # invoke the CLI
+```
+
+Run one test:
+
+```sh
+.venv/bin/python -m pytest tests/test_client.py::test_retries_on_429_then_succeeds
+```
+
+Live smoke test against the real API (no config file needed — env vars win):
+
+```sh
+LIMPET_DATA_DIR=/tmp/limpet-x LIMPET_STEAM_ID=173907991 .venv/bin/limpet matches
+```
+
+Docker (image reads all config from `LIMPET_*` env, so no interactive `init`):
+
+```sh
+make docker-build
+make docker-run ARGS="sync"
+```
+
+## Architecture
+
+Data flows through distinct layers; keep responsibilities where they are:
+
+```
+api/client.py   raw HTTP → dict/list. Auth, rate limiting, retry. The ONLY file
+                that knows deadlock-api.com URL shapes.
+api/models.py   pydantic models for the few well-specified responses
+                (MatchHistoryEntry, PlayerRank). Match metadata is deliberately
+                NOT modeled — it's a raw projection of Valve's protobuf and
+                changes with patches.
+assets.py       hero/item/rank id→name lookups, disk-cached with a TTL.
+ingest.py       fetch + persist: match-history sync, raw metadata → cache/.
+                upsert_from_metadata() derives a matches row without a prior sync.
+parse/metadata.py   MatchView: resolves our player slot, teammates/enemies,
+                    average_badge. Thin and defensive — match_info isn't modeled.
+features/*.py   micro/ and macro/ leaf modules (see the organizing principle
+                above) -> features/extract.py -> MatchFeatures{micro, macro}.
+                Each leaf degrades gracefully (value=None + note, or
+                needs_demo=True) instead of guessing when data isn't available
+                from match_info alone.
+coach/*.py      briefing.py (assemble) -> analyze.py (call Claude) -> a
+                validated CoachingReport (schema.py). Takes an anthropic.Anthropic
+                client as a parameter rather than constructing one — same
+                dependency-injection shape as DeadlockClient, so tests inject a
+                fake and no test hits the real API.
+report/markdown.py   CoachingReport -> the per-match .md file.
+store/db.py     SQLite. An index and workflow tracker, NOT the source of truth.
+cli.py          Typer app. Thin — delegates to the modules above.
+```
+
+### Coaching reports (`coach/`, `report/markdown.py`)
+
+`schema.py` hand-inlines the JSON schema sent to the API (`REPORT_JSON_SCHEMA`)
+rather than generating it from the `CoachingReport` pydantic model — deliberate,
+so nothing depends on `$ref`/`$defs` support in structured outputs (unverified).
+Keep the two in sync by hand when the shape changes. **`output_config.format.schema`
+rejects range/length constraints** — verified live: `minimum`/`maximum` on an
+`integer` property and `minItems`/`maxItems` on an `array` property both 400.
+Enforce those ranges in the pydantic model instead (already done for
+`rating`/`focus_this_week`) and describe them in a `description` field or the
+prompt for the model's benefit. `analyze.py` raises
+`CoachError` for every failure mode (auth, rate limit, refusal, schema
+mismatch) — `cli.py` catches it and still keeps the already-saved
+features/benchmarks, it just skips the report. The prompt (`prompt.py`) is a
+single stable string for cache-friendliness — never interpolate per-match
+content into it; per-match content only ever goes in the user-turn briefing.
+
+### Feature leaves
+
+A `Leaf` (`features/common.py`) is one coaching-relevant observation:
+`{key, dimension, sub_dimension, value, unit, needs_demo, note}`. Leaf functions
+take raw `player` dicts (a `match_info.players[]` entry) plus whatever else they
+need (`duration_s`, an `Assets` instance, `MatchView`) — never the whole
+`MatchView` for player-level leaves, to keep them unit-testable in isolation.
+`features/extract.py` is the only place that buckets leaves into
+`{micro: {sub_dimension: {key: {...}}}, macro: {...}}`. When a signal genuinely
+isn't computable from `match_info` (e.g. wave management), return a leaf with
+`value=None, needs_demo=True` and a `note` — don't approximate with a weak proxy
+and call it good.
+
+`tests/fixtures/match_104887482.json` is a real, complete match payload (a
+public leaderboard account, not the project owner's) committed for
+fixture-based feature tests; `tests/fixtures/items_104887482.json` is a small
+offline lookup (id → name/type/tier/cost) for the exact items that match's
+player bought, used by `tests/test_features.py`'s `FakeAssets` so those tests
+need no network.
+
+### Benchmarks
+
+`GET /v1/analytics/player-stats/metrics` already returns a full percentile
+breakdown per stat name (`{avg, std, percentile1..99}`) — `features/benchmarks.py`
+interpolates where a value falls in that curve, it doesn't compute quantiles
+itself. Its `LEAF_TO_STAT` table is the **only** place a leaf gets a
+`benchmark_percentile`, and only when a leaf has a genuine 1:1 match to one of
+the ~29 stat names the API tracks (see `docs/api-notes.md`) — most of Limpet's
+derived ratios (`cs_efficiency`, `ability_kill_share`, `lane_phase_damage_ratio`,
+…) have no API-side distribution and are left unbenchmarked. Extending
+`LEAF_TO_STAT` is the only change needed to benchmark a new leaf; don't
+approximate a percentile for something not in that table.
+
+### Source-of-truth rule
+
+Raw API payloads written under `<data_dir>/cache/` are canonical. SQLite
+(`matches`, `match_features`, `reports`, `focus_areas`, `progress_snapshots`) is
+a derived index — every computed table must be reconstructible from `cache/`
+without re-fetching. When adding a pipeline stage, cache the raw input first,
+then compute.
+
+### Filesystem layout
+
+`paths.py` is the single authority for where anything lives. Everything is under
+one data directory, chosen by `LIMPET_DATA_DIR` if set, else a platform data dir.
+Never build paths ad hoc — add a function to `paths.py`. Tests depend on this:
+the `data_dir` fixture sets `LIMPET_DATA_DIR` and `importlib.reload(paths)`.
+
+### Config resolution
+
+`config.py` (`Settings`, pydantic-settings): `LIMPET_*` env vars > `config.json`
+in the data dir > defaults. `Settings.account_id` normalizes any Steam ID form
+(account id / SteamID64 / `[U:1:…]` / `STEAM_1:…` / profile URL) via
+`ids.to_account_id`. Code paths that need identity call `settings.account_id`,
+never `settings.steam_id` directly.
+
+## Conventions
+
+- `from __future__ import annotations` at the top of every module.
+- ruff, line length 100, rule set `E,F,I,UP,B,SIM` (see `pyproject.toml`).
+- **New API endpoints go on `DeadlockClient` and nowhere else.** Add only
+  endpoints Limpet actually uses. Return parsed JSON; wrap in a model only if the
+  response is stable and documented.
+- pydantic models that mirror API responses use `extra="allow"` so unknown
+  fields (patch additions) don't break parsing.
+- `DeadlockClient` retries transport errors + 429/500/502/503/504 (4 attempts,
+  exponential backoff, honors `Retry-After`); other 4xx raise `DeadlockAPIError`
+  with `.status`. Match metadata 404/422 raises `MetadataNotReady` — matches take
+  minutes to become queryable after they end, so `fetch`/`watch` must tolerate it.
+- The rank `badge` field is already `tier*10 + subrank` (the 0–116 scale the
+  analytics `*_average_badge` filters use); `PlayerRank.average_badge` handles this.
+- Tests mock HTTP with `respx`; no network in the suite. Live checks are manual
+  (the smoke-test command above).
+- Commit message trailer used in this repo:
+  `Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>`

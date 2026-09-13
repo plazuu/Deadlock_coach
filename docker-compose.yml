@@ -1,0 +1,24 @@
+# Run one-off commands:
+#   docker compose run --rm limpet sync
+#   docker compose run --rm limpet matches --limit 10
+#
+# Once `limpet watch` lands (Phase 5), `docker compose up -d` will run it as a
+# long-lived poller.
+
+services:
+  limpet:
+    build: .
+    image: limpet:latest
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      LIMPET_DATA_DIR: /data
+    volumes:
+      - limpet-data:/data
+    # Default command polls for new matches; override on the CLI for one-offs.
+    command: ["watch"]
+    restart: unless-stopped
+
+volumes:
+  limpet-data:

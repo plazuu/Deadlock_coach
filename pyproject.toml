@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "limpet"
+version = "0.1.0"
+description = "A local AI coach for Deadlock: watches your match history and writes per-game coaching reports."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Nikolas" }]
+dependencies = [
+    "httpx>=0.28",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.4",
+    "typer>=0.12",
+    "click>=8.1",
+    "rich>=13.7",
+    "platformdirs>=4.2",
+    "tenacity>=8.3",
+    "anthropic>=0.40",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "respx>=0.21",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+limpet = "limpet.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/limpet"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
