@@ -25,6 +25,8 @@ from .api.client import DeadlockAPIError, DeadlockClient, MetadataNotReady
 from .api.models import MatchHistoryEntry, PlayerRank
 from .assets import Assets
 from .config import Settings, load_settings, write_config
+from .features.benchmarks import attach as attach_benchmarks
+from .features.benchmarks import fetch_hero_distributions
 from .features.extract import extract as extract_features
 from .ids import InvalidSteamID, to_account_id, to_steamid64
 from .ingest import (
@@ -222,10 +224,21 @@ def analyze(
 
         view = load_match(meta)
         features = extract_features(view, account_id, Assets(client))
-        db.save_features(conn, match_id, features.to_dict(), None, now)
+        feats_dict = features.to_dict()
+
+        distributions = None
+        try:
+            distributions = fetch_hero_distributions(
+                client, view.player(account_id).get("hero_id", 0), view.average_badge(account_id)
+            )
+            attach_benchmarks(feats_dict, distributions)
+        except DeadlockAPIError as e:
+            console.print(f"[yellow]Benchmarks unavailable, showing raw features: {e}[/yellow]")
+
+        db.save_features(conn, match_id, feats_dict, distributions, now)
         conn.execute("UPDATE matches SET analyzed_at = ? WHERE match_id = ?", (now, match_id))
 
-    console.print_json(json.dumps(features.to_dict()))
+    console.print_json(json.dumps(feats_dict))
 
 
 def _print_matches(entries: list[MatchHistoryEntry], assets: Assets) -> None:

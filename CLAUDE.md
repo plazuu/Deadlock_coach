@@ -16,12 +16,13 @@ that track recurring weaknesses over time.
   limits, and the `match_info` schema. Trust this over guessing; re-verify against
   `https://api.deadlock-api.com/openapi.json` if something looks off.
 
-Current state: Phases 0–1. Implemented = API client, config, asset cache, SQLite
-store, `parse/metadata.py`, `features/{micro,macro}/*` + `extract.py`, and the
-`init/whoami/sync/matches/fetch/analyze` CLI. `analyze` computes and prints
-`{micro,macro}` features but does not call an LLM yet — no Anthropic key is
-required for anything that exists today. Not yet built = `features/benchmarks.py`
-(Phase 2), `coach/`, `report/` (Phase 3+), the `watch` poller (Phase 5).
+Current state: Phases 0–2. Implemented = API client, config, asset cache, SQLite
+store, `parse/metadata.py`, `features/{micro,macro}/*` + `extract.py` +
+`benchmarks.py`, and the `init/whoami/sync/matches/fetch/analyze` CLI. `analyze`
+computes `{micro,macro}` features with rank-bracket benchmark percentiles
+attached where a genuine stat match exists, but does not call an LLM yet — no
+Anthropic key is required for anything that exists today. Not yet built =
+`coach/`, `report/` (Phase 3+), the `watch` poller (Phase 5).
 
 **Organizing principle: micro and macro.** Every feature, coaching observation,
 focus area, and drill is tagged `micro` (mechanical execution — CS, aim,
@@ -109,6 +110,19 @@ fixture-based feature tests; `tests/fixtures/items_104887482.json` is a small
 offline lookup (id → name/type/tier/cost) for the exact items that match's
 player bought, used by `tests/test_features.py`'s `FakeAssets` so those tests
 need no network.
+
+### Benchmarks
+
+`GET /v1/analytics/player-stats/metrics` already returns a full percentile
+breakdown per stat name (`{avg, std, percentile1..99}`) — `features/benchmarks.py`
+interpolates where a value falls in that curve, it doesn't compute quantiles
+itself. Its `LEAF_TO_STAT` table is the **only** place a leaf gets a
+`benchmark_percentile`, and only when a leaf has a genuine 1:1 match to one of
+the ~29 stat names the API tracks (see `docs/api-notes.md`) — most of Limpet's
+derived ratios (`cs_efficiency`, `ability_kill_share`, `lane_phase_damage_ratio`,
+…) have no API-side distribution and are left unbenchmarked. Extending
+`LEAF_TO_STAT` is the only change needed to benchmark a new leaf; don't
+approximate a percentile for something not in that table.
 
 ### Source-of-truth rule
 

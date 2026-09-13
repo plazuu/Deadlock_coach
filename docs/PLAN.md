@@ -131,7 +131,7 @@ src/limpet/
     common.py          ✅ Leaf record, phase windows, safe_ratio/per_min/euclidean helpers
     micro/             ✅ lasthits.py  aim.py  abilities.py  trades.py  fights.py  survival.py
     macro/             ✅ economy.py  objectives.py  rotations.py  awareness.py  itemization.py  waves.py
-    benchmarks.py      [Phase 2] attach rank-bracket percentile to each leaf
+    benchmarks.py      ✅ attach rank-bracket percentile to each mapped leaf
     extract.py         ✅ orchestrator -> MatchFeatures { micro: {...}, macro: {...} }
 
   coach/               [Phase 3]
@@ -157,7 +157,7 @@ Phase 2, `benchmark_percentile`. `MatchFeatures` is `{ micro: {...}, macro: {...
 | `limpet sync` | ✅ | Pull match history into the local db |
 | `limpet matches` | ✅ | List recent history |
 | `limpet fetch <id>` | ✅ | Fetch + cache one match's metadata |
-| `limpet analyze <id>` | ✅ (features only) | Parse + compute `{micro,macro}` features, save + print JSON. No LLM call yet — that's Phase 3. |
+| `limpet analyze <id>` | ✅ (features + benchmarks) | Parse, compute `{micro,macro}` features, attach rank-bracket benchmark percentiles, save + print JSON. No LLM call yet — that's Phase 3. |
 | `limpet backfill --last N` | Phase 4 | Ingest + analyze recent history (Batch API) |
 | `limpet report <id>` | Phase 4 | Re-render from stored data (no re-fetch, no LLM) |
 | `limpet progress` | Phase 4 | Show micro/macro trend lines + open focus areas |
@@ -249,7 +249,7 @@ notification + a line in `digests/YYYY-MM-DD.md`. Restart-safe (queue in SQLite)
 |---|---|
 | **0 — Scaffold** ✅ | API client, config, asset cache, SQLite store, `init/whoami/sync/matches/fetch`. |
 | **1 — Features** ✅ | `parse/metadata.py`; `features/micro/*` + `features/macro/*` (metadata-only leaves) + `extract.py`. `limpet analyze` emits a `{micro,macro}` features JSON (no LLM). Fixture match (`tests/fixtures/match_104887482.json`) + unit tests. `waves.py` and part of `rotations.py` are honestly stubbed (`needs_demo: true`) — they need Phase 6. |
-| **2 — Benchmarks** | `features/benchmarks.py`: rank-bracket percentile on every leaf. |
+| **2 — Benchmarks** ✅ | `features/benchmarks.py`: `GET /v1/analytics/player-stats/metrics` (hero + rank-bracket-windowed) already returns a full percentile breakdown per stat — no quantile math of our own. Only leaves with a genuine 1:1 match to an API-tracked stat get a `benchmark_percentile` (`LEAF_TO_STAT`, 8 leaves); everything else is left alone rather than forced. |
 | **3 — Coach** | `coach/{briefing,prompt,analyze}.py`, `report/markdown.py`. `limpet analyze <id>` writes the two-section Markdown report. |
 | **4 — Longitudinal** | `focus_areas` (with `dimension`) + `progress_snapshots`, `coach/focus.py`, `report/progress.py`, `limpet progress` / `backfill` / `report`. |
 | **5 — Auto-watch** | `limpet watch`: poller, notifications, daily digest, restart-safe queue. |

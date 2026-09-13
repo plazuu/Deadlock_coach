@@ -39,6 +39,37 @@ raw payloads.
 which is the same 0–116 scale the analytics `*_average_badge` filters use.
 `badge`/`rank`/`subrank` are all `0` for unranked ("Obscurus").
 
+## `player-stats/metrics` response shape (verified live, 2026-09-12)
+
+Not "DDSketch quantiles" in the raw sense — the response is already a `{stat_name:
+distribution}` map, one entry per tracked stat, each fully summarised:
+
+```json
+{
+  "accuracy": {
+    "avg": 0.47, "std": 0.09,
+    "percentile1": 0.21, "percentile5": 0.29, "percentile10": 0.33,
+    "percentile25": 0.39, "percentile50": 0.46, "percentile75": 0.54,
+    "percentile90": 0.61, "percentile95": 0.65, "percentile99": 0.73
+  },
+  "last_hits": { "...": "..." }
+}
+```
+
+29 stat names observed for a hero+badge-window query: `accuracy`, `assists`,
+`boss_damage`, `boss_damage_per_min`, `crit_shot_rate`, `deaths`, `denies`,
+`heal_prevented`, `healing`, `healing_per_min`, `kd`, `kda`, `kills`,
+`kills_plus_assists`, `last_hits`, `net_worth`, `net_worth_per_min`,
+`neutral_damage`, `neutral_damage_per_min`, `player_damage`,
+`player_damage_per_health`, `player_damage_per_min`,
+`player_damage_taken_per_min`, `player_healing`, `player_healing_per_min`,
+`self_healing`, `self_healing_per_min`, `teammate_barriering`,
+`teammate_healing`. This is a **fixed, narrower vocabulary** than Limpet's
+derived leaves — `features/benchmarks.py`'s `LEAF_TO_STAT` only maps leaves with
+a genuine 1:1 match (8 of them); most custom ratios (`cs_efficiency`,
+`ability_kill_share`, …) simply have no API-side distribution to compare
+against, and are left unbenchmarked rather than approximated.
+
 ## `match_info` shape (the workhorse)
 
 Top level: `duration_s`, `match_outcome`, `winning_team`, `start_time`,
