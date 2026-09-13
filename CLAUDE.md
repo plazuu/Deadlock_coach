@@ -111,7 +111,12 @@ cli.py          Typer app. Thin — delegates to the modules above.
 `schema.py` hand-inlines the JSON schema sent to the API (`REPORT_JSON_SCHEMA`)
 rather than generating it from the `CoachingReport` pydantic model — deliberate,
 so nothing depends on `$ref`/`$defs` support in structured outputs (unverified).
-Keep the two in sync by hand when the shape changes. `analyze.py` raises
+Keep the two in sync by hand when the shape changes. **`output_config.format.schema`
+rejects range/length constraints** — verified live: `minimum`/`maximum` on an
+`integer` property and `minItems`/`maxItems` on an `array` property both 400.
+Enforce those ranges in the pydantic model instead (already done for
+`rating`/`focus_this_week`) and describe them in a `description` field or the
+prompt for the model's benefit. `analyze.py` raises
 `CoachError` for every failure mode (auth, rate limit, refusal, schema
 mismatch) — `cli.py` catches it and still keeps the already-saved
 features/benchmarks, it just skips the report. The prompt (`prompt.py`) is a

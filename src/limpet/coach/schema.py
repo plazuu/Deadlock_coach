@@ -76,7 +76,11 @@ def _pillar_schema() -> dict:
         "type": "object",
         "properties": {
             "assessment": {"type": "string"},
-            "rating": {"type": "integer", "minimum": 0, "maximum": 100},
+            # No `minimum`/`maximum` here: output_config.format.schema rejects range
+            # constraints on integers (verified live — 400 invalid_request_error).
+            # The 0-100 range is enforced on the response side by the pydantic
+            # model (PillarAssessment.rating uses Field(ge=0, le=100)) instead.
+            "rating": {"type": "integer", "description": "0-100"},
             "strengths": {"type": "array", "items": {"type": "string"}},
             "mistakes": {"type": "array", "items": _mistake_schema()},
         },
@@ -93,8 +97,11 @@ REPORT_JSON_SCHEMA = {
         "macro": _pillar_schema(),
         "focus_this_week": {
             "type": "array",
-            "minItems": 1,
-            "maxItems": 3,
+            # No minItems/maxItems: also rejected by output_config.format.schema
+            # (verified live). Length (1-3) is enforced by the pydantic model
+            # (CoachingReport.focus_this_week uses Field(min_length=1, max_length=3))
+            # and stated as an instruction in the system prompt.
+            "description": "1 to 3 items",
             "items": {
                 "type": "object",
                 "properties": {

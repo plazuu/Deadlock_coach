@@ -1,6 +1,13 @@
 """The coaching system prompt: persona, the micro/macro rubric, and the rules
 that keep the report honest. Kept as a single stable string so it prompt-caches
 cleanly (see coach/analyze.py) — don't interpolate per-match content into it.
+
+Note: at ~880 estimated tokens, this is close to (possibly under) the ~1024
+token minimum cacheable prefix — the `cache_control` breakpoint on it may
+currently be a silent no-op. Not worth trimming for; it'll start actually
+caching once Phase 4 adds more rubric/context here. Verify with
+`response.usage.cache_creation_input_tokens` / `cache_read_input_tokens` if
+cost becomes a concern.
 """
 
 from __future__ import annotations
