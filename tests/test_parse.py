@@ -48,3 +48,15 @@ def test_team_helpers(view):
 def test_objectives_and_mid_boss_present(view):
     assert len(view.objectives) > 0
     assert len(view.mid_boss) > 0
+
+
+def test_position_at_resolves_within_player_bounds(view):
+    slot = view.player(ACCOUNT_ID)["player_slot"]
+    path = view.match_paths[slot]
+    pos = view.position_at(slot, 100)
+    assert path["x_min"] <= pos["x"] <= path["x_max"]
+    assert path["y_min"] <= pos["y"] <= path["y_max"]
+
+
+def test_position_at_unknown_slot_is_none(view):
+    assert view.position_at(9999, 100) is None

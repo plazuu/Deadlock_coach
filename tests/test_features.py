@@ -53,6 +53,7 @@ def test_extract_buckets_into_micro_and_macro(view, assets):
         "rotations",
         "awareness",
         "itemization",
+        "farm_stealing",
         "wave_management",
     }
 
@@ -119,8 +120,27 @@ def test_wave_management_is_honestly_stubbed(view, assets):
     assert wm["needs_demo"] is True
 
 
-def test_rotations_needs_demo_leaf_present(view, assets):
+def test_farm_stealing_counts_are_sane(view, assets):
+    features = extract(view, ACCOUNT_ID, assets)
+    fs = features.macro["farm_stealing"]
+    assert fs["farm_steal_opportunities"]["value"] >= 0
+    assert fs["farm_steal_windows_taken"]["value"] >= 0
+    assert fs["farm_steal_windows_taken"]["value"] <= fs["farm_steal_opportunities"]["value"]
+
+
+def test_farm_stealing_degrades_without_player_slot(view, assets):
+    from limpet.features.macro import farm_stealing
+
+    player = view.player(ACCOUNT_ID)
+    leaves = farm_stealing.extract(view, ACCOUNT_ID, {**player, "player_slot": None})
+    assert len(leaves) == 1
+    assert leaves[0].value is None
+    assert leaves[0].needs_demo is True
+
+
+def test_rotations_response_distance_from_match_paths(view, assets):
     features = extract(view, ACCOUNT_ID, assets)
     rot = features.macro["rotations"]
-    assert rot["avg_response_distance"]["needs_demo"] is True
+    assert "needs_demo" not in rot["avg_response_distance"]
+    assert rot["avg_response_distance"]["value"] > 0
     assert 0 <= rot["fight_participation"]["value"] <= 1

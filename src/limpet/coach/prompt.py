@@ -55,6 +55,13 @@ supports one of these improving, stalling, or resolving, say so in `progress_not
 If there are none yet (this may be one of the player's first analyzed matches), say \
 so briefly rather than inventing history.
 
+You're also given `item_builds`: `our_build` is every item this player bought this \
+match, by name and `t` (game_time_s); `enemies` is each enemy's hero and their notable \
+(tier2+) purchases the same way. Use this to make itemization critique concrete and \
+comparative — name the actual item that was missing or late, and when relevant, name \
+what an enemy bought that it should have answered ("the enemy Vindicta had [X] by 9:00 \
+— you needed [Y] before that, not [Z]"), instead of speaking only in aggregate counts.
+
 ## Rules
 
 - Always fill both `micro` and `macro` — never leave one thin because the other had \

@@ -8,7 +8,7 @@ from typing import Any
 from ..assets import Assets
 from ..parse.metadata import MatchView
 from .common import Leaf
-from .macro import awareness, economy, itemization, objectives, rotations, waves
+from .macro import awareness, economy, farm_stealing, itemization, objectives, rotations, waves
 from .micro import abilities, aim, fights, lasthits, survival, trades
 
 
@@ -46,9 +46,10 @@ def extract(view: MatchView, account_id: int, assets: Assets | None = None) -> M
         survival.extract(player, duration_s),
         economy.extract(player, duration_s),
         objectives.extract(view, our_team),
-        rotations.extract(player, team_kills_total),
+        rotations.extract(view, account_id, player, team_kills_total),
         awareness.extract(player),
         itemization.extract(player, assets),
+        farm_stealing.extract(view, account_id, player),
         waves.extract(),
     ):
         _bucket(features, leaves)

@@ -31,6 +31,7 @@ from .coach.analyze import CoachError
 from .coach.analyze import analyze_match as run_coach
 from .coach.briefing import build as build_briefing
 from .coach.briefing import estimate_tokens
+from .coach.builds import build_item_context
 from .coach.focus import reconcile as reconcile_focus_areas
 from .config import Settings, load_settings, write_config
 from .features.benchmarks import attach as attach_benchmarks
@@ -120,7 +121,7 @@ def init(
 
 @app.command()
 def whoami() -> None:
-    """Show the resolved account id and current rank."""
+    """Show the resolved account id, current rank, and most-played heroes."""
     settings = load_settings()
     account_id = _require_account(settings)
     console.print(f"account_id : [bold]{account_id}[/bold]")
@@ -135,6 +136,14 @@ def whoami() -> None:
             )
         except DeadlockAPIError as e:
             console.print(f"rank       : [yellow]{e}[/yellow]")
+
+        with db.session() as conn:
+            top = db.top_heroes(conn, account_id)
+        if top:
+            heroes = ", ".join(
+                f"{assets.hero_name(row['hero_id'])} ({row['games']})" for row in top
+            )
+            console.print(f"top heroes : {heroes}")
 
 
 @assets_app.command("refresh")
@@ -200,7 +209,10 @@ def fetch(
 
 @app.command()
 def analyze(
-    match_id: Annotated[int, typer.Argument(help="Match id to analyze.")],
+    match_id: Annotated[
+        int | None,
+        typer.Argument(help="Match id to analyze. Omit to analyze your most recent match."),
+    ] = None,
     report: Annotated[
         bool,
         typer.Option(help="Also call Claude for a coaching report (needs an Anthropic key)."),
@@ -209,8 +221,17 @@ def analyze(
     """Compute micro/macro features + benchmarks, then (by default) a coaching report."""
     settings = load_settings()
     account_id = _require_account(settings)
-    meta = cached_metadata(match_id)
     with _client(settings) as client, db.session() as conn:
+        if match_id is None:
+            history = [
+                MatchHistoryEntry.model_validate(r) for r in client.match_history(account_id)
+            ]
+            if not history:
+                console.print("[red]No match history found for this account.[/red]")
+                raise typer.Exit(1)
+            match_id = max(history, key=lambda e: e.start_time).match_id
+
+        meta = cached_metadata(match_id)
         if meta is None:
             try:
                 meta, _path = fetch_metadata(client, match_id)
@@ -264,6 +285,7 @@ def analyze(
             {"dimension": r["dimension"], "theme": r["theme"], "status": r["status"]}
             for r in db.active_focus_areas(conn)
         ]
+        item_builds = build_item_context(view, account_id, assets)
         briefing = build_briefing(
             feats_dict,
             match_id=match_id,
@@ -272,6 +294,7 @@ def analyze(
             duration_s=view.duration_s,
             rank_name=assets.rank_name(view.average_badge(account_id)),
             active_focus_areas=focus_areas,
+            item_builds=item_builds,
         )
         est_tokens = estimate_tokens(json.dumps(briefing))
         if est_tokens > settings.briefing_token_budget:

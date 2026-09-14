@@ -149,6 +149,15 @@ def recent_matches(conn: sqlite3.Connection, limit: int = 20) -> list[sqlite3.Ro
     ).fetchall()
 
 
+def top_heroes(conn: sqlite3.Connection, account_id: int, limit: int = 3) -> list[sqlite3.Row]:
+    """Most-played hero_ids for this account, from locally synced matches."""
+    return conn.execute(
+        "SELECT hero_id, COUNT(*) AS games FROM matches WHERE account_id = ? "
+        "GROUP BY hero_id ORDER BY games DESC LIMIT ?",
+        (account_id, limit),
+    ).fetchall()
+
+
 def save_features(
     conn: sqlite3.Connection,
     match_id: int,

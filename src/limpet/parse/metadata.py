@@ -54,6 +54,42 @@ class MatchView:
     def mid_boss(self) -> list[dict[str, Any]]:
         return self.raw.get("mid_boss") or []
 
+    @property
+    def match_paths(self) -> dict[int, dict[str, Any]]:
+        """player_slot -> {x_min, x_max, y_min, y_max, x_pos[], y_pos[], interval_s,
+        x_resolution, y_resolution}, one sample per second for the whole match.
+
+        No replay/demo-query needed. `x_pos`/`y_pos` are quantized ints in
+        [0, x_resolution]/[0, y_resolution] — NOT raw world units — scale them
+        into [x_min, x_max]/[y_min, y_max] to get an actual position (verified
+        against the fixture: raw values fall well outside x_min/x_max as-is).
+        """
+        raw = self.raw.get("match_paths") or {}
+        interval_s = raw.get("interval_s", 1.0)
+        x_resolution = raw.get("x_resolution") or 1
+        y_resolution = raw.get("y_resolution") or 1
+        return {
+            p["player_slot"]: {
+                **p,
+                "interval_s": interval_s,
+                "x_resolution": x_resolution,
+                "y_resolution": y_resolution,
+            }
+            for p in raw.get("paths", [])
+            if "player_slot" in p
+        }
+
+    def position_at(self, player_slot: int, t: float) -> dict[str, float] | None:
+        """This player's decoded world position at game time `t`, or None if unavailable."""
+        path = self.match_paths.get(player_slot)
+        x_pos, y_pos = path.get("x_pos") if path else None, path.get("y_pos") if path else None
+        if not path or not x_pos or not y_pos:
+            return None
+        idx = max(0, min(int(t / path.get("interval_s", 1.0)), len(x_pos) - 1, len(y_pos) - 1))
+        x = path["x_min"] + (x_pos[idx] / path["x_resolution"]) * (path["x_max"] - path["x_min"])
+        y = path["y_min"] + (y_pos[idx] / path["y_resolution"]) * (path["y_max"] - path["y_min"])
+        return {"x": x, "y": y}
+
     def player(self, account_id: int) -> dict[str, Any]:
         for p in self.players:
             if p.get("account_id") == account_id:

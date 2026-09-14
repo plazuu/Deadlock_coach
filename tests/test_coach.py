@@ -112,6 +112,20 @@ def test_build_briefing_shape():
     assert briefing["result"] == "win"
     assert briefing["duration_min"] == 30.0
     assert briefing["active_focus_areas"][0]["theme"] == "aim"
+    assert "item_builds" not in briefing
+
+
+def test_build_briefing_includes_item_builds_when_given():
+    briefing = build_briefing(
+        {"micro": {}, "macro": {}},
+        match_id=123,
+        hero_name="Vindicta",
+        won=True,
+        duration_s=1800,
+        rank_name="Archon 3",
+        item_builds={"our_build": [], "enemies": []},
+    )
+    assert briefing["item_builds"] == {"our_build": [], "enemies": []}
 
 
 def test_estimate_tokens_is_roughly_length_over_four():
