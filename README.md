@@ -10,6 +10,12 @@ compounds over time.
 
 See [`docs/PLAN.md`](docs/PLAN.md) for the full design and roadmap.
 
+**Requirement:** your Steam profile's **"Game details" privacy setting must be
+set to Public** (Steam → your profile → Edit Profile → Privacy Settings).
+deadlock-api.com pulls match history through Steam's public API — if this is
+set to Friends Only or Private, no match data reaches it at all, no matter
+what Limpet does.
+
 ## Status
 
 Phases 0–4 done: ingestion, micro/macro feature extraction, rank-bracket
@@ -36,11 +42,14 @@ omit it to analyze your most recent match. Run `limpet help` (or
 or `limpet <command> --help` for a specific command's options.
 
 **Just played a match and it's not showing up in `sync`/`matches`/`analyze`?**
-The deadlock-api.com match-history list is server-side cached — it doesn't
-always include a match the moment it ends. Pass `--force-refetch` to
-`sync`, `matches`, or `analyze` to ask the API to refresh it from Steam.
-That's rate-limited to roughly 1-10 requests/hour, so it's meant for
-occasional use ("did my last game post yet?"), not every run.
+First check the "Game details" privacy setting above — that's the most
+common cause and no amount of retrying fixes it. If that's already Public,
+the deadlock-api.com match-history list is also server-side cached, so it
+doesn't always include a match the moment it ends. Pass `--force-refetch` to
+`sync`, `matches`, or `analyze` to ask the API to refresh it from Steam. That
+call is itself cached for 10 minutes behind a CDN, on top of being rate
+limited to roughly 1-10 requests/hour — so don't retry it back-to-back, wait
+a few minutes between attempts.
 
 `analyze` needs an Anthropic API key to produce the actual coaching report —
 export `ANTHROPIC_API_KEY` in your shell (or `LIMPET_ANTHROPIC_API_KEY` /
