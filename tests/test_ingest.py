@@ -43,6 +43,41 @@ def test_top_heroes_orders_by_games_played(data_dir):
         assert [(r["hero_id"], r["games"]) for r in top] == [(15, 3), (20, 2)]
 
 
+def test_analyzed_match_ids(data_dir):
+    import time
+
+    with db.session() as conn:
+        for match_id, hero_id in [(1, 15), (2, 15), (3, 20)]:
+            db.upsert_match(
+                conn,
+                {
+                    "match_id": match_id,
+                    "account_id": 111,
+                    "played_at": match_id,
+                    "hero_id": hero_id,
+                    "won": 1,
+                    "abandoned": 0,
+                    "duration_s": 1800,
+                    "match_mode": 4,
+                    "kills": 0,
+                    "deaths": 0,
+                    "assists": 0,
+                    "net_worth": 0,
+                    "average_badge": 0,
+                    "raw_meta_path": None,
+                    "demo_path": None,
+                    "ingested_at": None,
+                    "analyzed_at": None,
+                },
+            )
+        db.save_report(conn, 1, "claude-opus-5", "# md", {"a": 1}, int(time.time()))
+
+    with db.session() as conn:
+        assert db.analyzed_match_ids(conn, [1, 2, 3]) == {1}
+        assert db.analyzed_match_ids(conn, []) == set()
+        assert db.analyzed_match_ids(conn, [2, 3]) == set()
+
+
 def test_sync_reports_only_new_matches(data_dir, fake_history_entry):
     e2 = {**fake_history_entry, "match_id": 900002, "start_time": 1_726_100_000}
     client = FakeClient([fake_history_entry, e2])

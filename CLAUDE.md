@@ -16,16 +16,24 @@ weaknesses across matches so the feedback compounds over time.
   limits, and the `match_info` schema. Trust this over guessing; re-verify against
   `https://api.deadlock-api.com/openapi.json` if something looks off.
 
-Current state: Phases 0–4. Implemented = API client, config, asset cache, SQLite
-store, `parse/metadata.py`, `features/{micro,macro}/*` + `extract.py` +
-`benchmarks.py`, `coach/{briefing,prompt,schema,analyze,focus}.py`,
-`report/{markdown,progress}.py`, and the full
-`init/whoami/sync/matches/fetch/analyze/progress` CLI. `limpet analyze <id>`
+Current state: Phases 0–5. Implemented = API client, config, asset cache, SQLite
+store (schema v2 — `matches`, `match_features`, `reports`, `focus_areas`,
+`progress_snapshots`, `watch_queue`), `parse/metadata.py`,
+`features/{micro,macro}/*` + `extract.py` + `benchmarks.py`,
+`coach/{briefing,prompt,schema,analyze,focus,builds}.py`,
+`report/{markdown,progress}.py`, `notify.py`, and the full
+`init/whoami/sync/matches/fetch/analyze/backfill/report/progress/watch/help`
+CLI. `limpet analyze [id]` (id optional, defaults to your most recent match)
 produces a coaching report, reconciles it against tracked `focus_areas`, and
 regenerates `PROGRESS.md` (Anthropic key required — `ANTHROPIC_API_KEY` or
 `LIMPET_ANTHROPIC_API_KEY`; `--no-report` stops after features/benchmarks if
-you don't have one configured). Not yet built = the `watch` poller (Phase 5),
-`backfill`/`report` commands.
+you don't have one configured). `limpet backfill --last N` does the same for
+N recent matches via the Anthropic Batch API (50% cost) and backfills
+historical `progress_snapshots` days; `limpet report <id>` re-renders a
+stored report with no re-fetch/no LLM call; `limpet watch [--once]` is the
+long-running auto-poller (PLAN.md §5) — restart-safe SQLite queue, backoff on
+`MetadataNotReady`, best-effort OS notifications, daily digest. Not yet
+built = Phase 6 (replay-derived features via the demo-query API).
 
 **Organizing principle: micro and macro.** Every feature, coaching observation,
 focus area, and drill is tagged `micro` (mechanical execution — CS, aim,
@@ -43,12 +51,13 @@ never hand-edited, whose job is to feed back into the *next* match's briefing
 (via `db.active_focus_areas()`) so the coach has continuity. `coach/focus.py`
 matches this match's report against tracked themes with a cheap Haiku call
 (skipped when nothing's tracked yet) rather than string equality — free-text
-themes reword the same underlying issue across matches. Known gap: PROGRESS.md's
-trend table only gets a day's row computed when a match is *analyzed on the
-day it's played* (`report/progress.py` only recomputes "today" each run, by
-design — cheap, and correct once `watch` exists) — analyzing old matches
-backfills `focus_areas` but not historical trend rows. Read §5a before
-touching `coach/focus.py` or `report/progress.py`.
+themes reword the same underlying issue across matches. `report/progress.py`'s
+`recompute_snapshot()` only touches *today*'s row by default (cheap — no need
+to rescan every historical day on every plain `analyze` call), but it always
+took an explicit `day` param; `limpet backfill` calls it once per day its
+batch touches, closing what used to be a gap where analyzing an old match
+backfilled `focus_areas` but not its historical trend row. Read §5a before
+touching `coach/focus.py`, `report/progress.py`, or `cli.py`'s `backfill`.
 
 ## Commands
 
@@ -110,8 +119,16 @@ coach/*.py      briefing.py (assemble) -> analyze.py (call Claude) -> a
                 dependency-injection shape as DeadlockClient, so tests inject a
                 fake and no test hits the real API.
 report/markdown.py   CoachingReport -> the per-match .md file.
+notify.py       Best-effort OS desktop notifications for `watch` — never
+                raises; silently no-ops with no notifier available (always
+                true inside Docker). digests/YYYY-MM-DD.md is the reliable
+                per-match record `watch` leaves either way.
 store/db.py     SQLite. An index and workflow tracker, NOT the source of truth.
-cli.py          Typer app. Thin — delegates to the modules above.
+cli.py          Typer app. `_prepare_match`/`_run_live_pipeline` hold the
+                shared per-match pipeline (ingest -> features -> benchmarks ->
+                briefing -> LLM call -> render -> save -> reconcile), reused
+                by `analyze`, `backfill`, and `watch` rather than duplicated
+                per command.
 ```
 
 ### Coaching reports (`coach/`, `report/markdown.py`)

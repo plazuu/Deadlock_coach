@@ -2,8 +2,10 @@
 #   docker compose run --rm limpet sync
 #   docker compose run --rm limpet matches --limit 10
 #
-# Once `limpet watch` lands (Phase 5), `docker compose up -d` will run it as a
-# long-lived poller.
+# `docker compose up -d` runs `limpet watch` as a long-lived poller (see the
+# `command` below) — restart-safe, stops cleanly on SIGTERM. No desktop
+# notifications in this mode (no display in the container); check
+# digests/YYYY-MM-DD.md in the volume, or `docker compose logs -f`.
 
 services:
   limpet:

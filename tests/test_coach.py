@@ -5,7 +5,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from limpet.coach.analyze import CoachError, analyze_match
+from limpet.coach.analyze import (
+    CoachError,
+    analyze_match,
+    collect_batch_reports,
+    poll_batch,
+    submit_batch,
+)
 from limpet.coach.briefing import build as build_briefing
 from limpet.coach.briefing import estimate_tokens
 from limpet.coach.schema import REPORT_JSON_SCHEMA, CoachingReport
@@ -162,3 +168,84 @@ def test_analyze_match_raises_on_schema_mismatch():
     client = FakeAnthropicClient(_fake_response(text=json.dumps({"not": "a report"})))
     with pytest.raises(CoachError, match="didn't match"):
         analyze_match(client, {})
+
+
+class FakeBatches:
+    def __init__(self, *, batch_id="batch_1", statuses=None, results=None):
+        self.created_kwargs = None
+        self.batch_id = batch_id
+        # one processing_status per retrieve() call, last one repeats if exhausted
+        self._statuses = statuses or ["ended"]
+        self._retrieve_calls = 0
+        self._results = results or []
+
+    def create(self, **kwargs):
+        self.created_kwargs = kwargs
+        return SimpleNamespace(id=self.batch_id)
+
+    def retrieve(self, batch_id):
+        idx = min(self._retrieve_calls, len(self._statuses) - 1)
+        status = self._statuses[idx]
+        self._retrieve_calls += 1
+        return SimpleNamespace(
+            id=batch_id,
+            processing_status=status,
+            request_counts=SimpleNamespace(processing=0, succeeded=1, errored=0),
+        )
+
+    def results(self, batch_id):
+        return iter(self._results)
+
+
+class FakeAnthropicBatchClient:
+    def __init__(self, batches: FakeBatches):
+        self.messages = SimpleNamespace(batches=batches)
+
+
+def test_submit_batch_sends_one_request_per_match_with_string_custom_ids():
+    batches = FakeBatches()
+    client = FakeAnthropicBatchClient(batches)
+    batch_id = submit_batch(client, {111: {"hero": "Vindicta"}, 222: {"hero": "Abrams"}})
+    assert batch_id == "batch_1"
+    requests = batches.created_kwargs["requests"]
+    assert {r["custom_id"] for r in requests} == {"111", "222"}
+    assert all(isinstance(r["custom_id"], str) for r in requests)
+    schemas = {
+        r["params"]["output_config"]["format"]["schema"] is REPORT_JSON_SCHEMA for r in requests
+    }
+    assert schemas == {True}
+
+
+def test_poll_batch_polls_until_ended_and_calls_on_tick(monkeypatch):
+    import limpet.coach.analyze as analyze_module
+
+    monkeypatch.setattr(analyze_module.time, "sleep", lambda *_: None)
+    batches = FakeBatches(statuses=["in_progress", "in_progress", "ended"])
+    client = FakeAnthropicBatchClient(batches)
+    ticks = []
+    result = poll_batch(client, "batch_1", on_tick=ticks.append)
+    assert result.processing_status == "ended"
+    assert [t.processing_status for t in ticks] == ["in_progress", "in_progress", "ended"]
+
+
+def test_collect_batch_reports_keys_by_custom_id_and_handles_every_variant():
+    succeeded_message = _fake_response(text=json.dumps(VALID_REPORT))
+    results = [
+        SimpleNamespace(
+            custom_id="111", result=SimpleNamespace(type="succeeded", message=succeeded_message)
+        ),
+        SimpleNamespace(
+            custom_id="222",
+            result=SimpleNamespace(type="errored", error=SimpleNamespace(type="invalid_request")),
+        ),
+        SimpleNamespace(custom_id="333", result=SimpleNamespace(type="expired")),
+    ]
+    batches = FakeBatches(results=results)
+    client = FakeAnthropicBatchClient(batches)
+
+    out = collect_batch_reports(client, "batch_1")
+
+    assert set(out) == {111, 222, 333}
+    assert isinstance(out[111], CoachingReport)
+    assert isinstance(out[222], CoachError)
+    assert isinstance(out[333], CoachError)

@@ -158,15 +158,16 @@ Phase 2, `benchmark_percentile`. `MatchFeatures` is `{ micro: {...}, macro: {...
 | Command | Status | Does |
 |---|---|---|
 | `limpet init` | ✅ | Write config, resolve Steam ID, cache assets, verify access |
-| `limpet whoami` | ✅ | Show resolved account id + current rank |
-| `limpet sync` | ✅ | Pull match history into the local db |
-| `limpet matches` | ✅ | List recent history |
+| `limpet whoami` | ✅ | Show resolved account id, current rank, and top-3 most-played heroes |
+| `limpet sync` | ✅ | Pull match history into the local db (`--force-refetch` to bypass the API's cached history list) |
+| `limpet matches` | ✅ | List recent history (`--force-refetch` too) |
 | `limpet fetch <id>` | ✅ | Fetch + cache one match's metadata |
-| `limpet analyze <id>` | ✅ | Parse, compute `{micro,macro}` features, attach benchmark percentiles, call Claude for a coaching report, render + save the Markdown. `--no-report` stops after features/benchmarks (no Anthropic call). |
+| `limpet analyze [id]` | ✅ | Parse, compute `{micro,macro}` features, attach benchmark percentiles, call Claude for a coaching report, render + save the Markdown. `id` is optional (defaults to your most recent match); `--no-report` stops after features/benchmarks (no Anthropic call). |
 | `limpet progress` | ✅ | Show the coaching profile (`PROGRESS.md`): active/resolved focus areas, last game's strengths, the daily trend table |
-| `limpet backfill --last N` | not built | Ingest + analyze recent history (Batch API) — would also backfill historical `progress_snapshots` days, which `analyze` alone only computes for "today" |
-| `limpet report <id>` | not built | Re-render from stored data (no re-fetch, no LLM) |
-| `limpet watch` | Phase 5 | Long-running poller |
+| `limpet backfill --last N` | ✅ | Ingest + analyze the N most recent not-yet-analyzed matches via the Anthropic Batch API (50% cost) — reports in one run all see the same pre-backfill `active_focus_areas` snapshot (focus-area reconciliation itself still runs as N sequential calls afterward, in chronological order, since it's stateful). Also backfills every day touched into `progress_snapshots`, closing the gap noted below. Degrades gracefully on the metadata endpoint's 3/hour IP limit — processes what it can, tells you how many matches are left for a later run. |
+| `limpet report <id>` | ✅ | Re-render a stored `CoachingReport` to Markdown from `structured_json` (no re-fetch, no LLM call) |
+| `limpet help` | ✅ | List every command and what it does, generated from each command's own help text |
+| `limpet watch [--once]` | ✅ | Long-running poller: syncs match history every `poll_interval_minutes`, enqueues new mode-matching matches into a restart-safe SQLite queue (`watch_queue`), runs the full live pipeline on each (same `_prepare_match`/`_run_live_pipeline` core as `analyze`), retries `MetadataNotReady` with backoff, appends a line to `digests/YYYY-MM-DD.md`, and fires a best-effort OS notification (silent no-op without a notifier, e.g. inside Docker). `--once` runs a single poll cycle and exits. Handles SIGTERM/SIGINT for a clean stop under `docker stop`. |
 
 ---
 
@@ -232,11 +233,29 @@ reconstruct from the raw payloads under `<data_dir>/cache/`.
    today, idempotent) and rewrites `PROGRESS.md` in full from `focus_areas` +
    `progress_snapshots` — never incrementally patched.
 
-### Auto-watch loop (`limpet watch`, Phase 5)
+### Auto-watch loop (`limpet watch`, Phase 5) ✅
 
-Poll `match-history` every N min; diff against `matches`; enqueue new ids; run the
-pipeline; on `MetadataNotReady` requeue with backoff. On completion: desktop
-notification + a line in `digests/YYYY-MM-DD.md`. Restart-safe (queue in SQLite).
+Poll `match-history` every `poll_interval_minutes`; enqueue new mode-matching
+match ids (`settings.match_modes`, filtered via `MatchHistoryEntry.match_mode_name`)
+into `watch_queue` (SQLite — schema v2, `store/db.py`); drain due rows through
+the same live pipeline `analyze` uses (`cli.py`'s `_prepare_match` +
+`_run_live_pipeline`). Two failure classes, different treatment:
+`MetadataNotReady` (expected — metadata lags a match's end) gets generous
+exponential-backoff retries (`MAX_METADATA_ATTEMPTS = 20`, capped at 2h);
+any other `DeadlockAPIError`/`PlayerNotInMatch` gets few (`MAX_OTHER_ATTEMPTS
+= 3`) since it's unlikely to self-resolve, then the row is marked `failed`
+(terminal). A `CoachError` (the LLM call itself) doesn't retry the queue
+item at all — matches `analyze()`'s "keep what could be computed" behavior;
+features/benchmarks are saved either way. On completion: a line in
+`digests/YYYY-MM-DD.md` (the reliable record) plus a best-effort OS
+notification (`notify.py` — macOS `osascript`/Linux `notify-send`, silent
+no-op with no notifier available, which is always true inside Docker).
+Restart-safe: the queue lives in SQLite, not memory, so killing and
+restarting `watch` resumes cleanly. Handles SIGTERM/SIGINT for a clean stop
+(matters because `docker-compose.yml` already has `restart: unless-stopped`
+and defaults `command` to `["watch"]`). `--once` runs one poll cycle and
+exits, for testing or for driving polling from an external cron/systemd
+timer instead.
 
 ---
 
@@ -307,14 +326,15 @@ _Nothing resolved yet._
 ```
 
 One real limitation of this design, found while verifying it live:
-`report/progress.py`'s snapshot recompute only ever touches *today*'s row
-(cheap — no need to rescan every historical day on every `analyze` call). A
-match played days or weeks ago and analyzed just now — the normal case while
-there's no `backfill`/`watch` yet — contributes to `focus_areas` immediately
-but won't show up in the Trend table until a *historical* snapshot is
-backfilled (not built) or a match is actually analyzed on the day it's
-played. Not a bug, just a gap the not-yet-built `backfill` command should
-close by recomputing every day it touches, not just today's.
+`report/progress.py`'s snapshot recompute only ever touches *today*'s row by
+default (cheap — no need to rescan every historical day on every plain
+`analyze` call). A match played days or weeks ago and analyzed just now —
+the normal case before `watch` exists — contributes to `focus_areas`
+immediately but won't show up in the Trend table until a *historical*
+snapshot is backfilled or the match is analyzed on the day it's played. Not
+a bug: `recompute_snapshot(conn, day=...)` always took an explicit day, and
+`limpet backfill` (✅) closes the gap by calling it for every day its batch
+touches instead of only ever letting it default to today.
 
 ---
 
@@ -342,8 +362,8 @@ close by recomputing every day it touches, not just today's.
 | **1 — Features** ✅ | `parse/metadata.py`; `features/micro/*` + `features/macro/*` (metadata-only leaves) + `extract.py`. `limpet analyze` emits a `{micro,macro}` features JSON (no LLM). Fixture match (`tests/fixtures/match_104887482.json`) + unit tests. `waves.py` and part of `rotations.py` are honestly stubbed (`needs_demo: true`) — they need Phase 6. |
 | **2 — Benchmarks** ✅ | `features/benchmarks.py`: `GET /v1/analytics/player-stats/metrics` (hero + rank-bracket-windowed) already returns a full percentile breakdown per stat — no quantile math of our own. Only leaves with a genuine 1:1 match to an API-tracked stat get a `benchmark_percentile` (`LEAF_TO_STAT`, 8 leaves); everything else is left alone rather than forced. |
 | **3 — Coach** ✅ | `coach/{briefing,prompt,schema,analyze}.py`, `report/markdown.py`. `limpet analyze <id>` writes the Summary/Micro/Macro/Focus/Progress Markdown report. Schema is hand-inlined JSON (no `$ref`/`$defs`) validated against `CoachingReport`; `active_focus_areas` in the briefing and `db.active_focus_areas()` are wired but empty until Phase 4 populates them. Unit-tested against a fake Anthropic client — no real API calls in the test suite. |
-| **4 — Longitudinal** ✅ | `coach/focus.py` (Haiku reconciliation against `focus_areas`), `report/progress.py` (recompute today's `progress_snapshots` row + full re-render), `limpet progress`. Verified live: a real match opened 3 focus areas, a second real match advanced one to `improving` and opened 2 more. `limpet backfill` / `limpet report` (re-render without re-analyzing) not built — see the Trend-table gap noted in §5a. |
-| **5 — Auto-watch** | `limpet watch`: poller, notifications, daily digest, restart-safe queue. |
+| **4 — Longitudinal** ✅ | `coach/focus.py` (Haiku reconciliation against `focus_areas`), `report/progress.py` (recompute today's `progress_snapshots` row + full re-render), `limpet progress`. Verified live: a real match opened 3 focus areas, a second real match advanced one to `improving` and opened 2 more. `limpet backfill` (Batch API + sequential focus reconciliation + per-day snapshot backfill) and `limpet report` (re-render without re-analyzing) now built — see §5a for the Trend-table gap they close and the one real tradeoff of parallelizing the Opus call (a backfill run's reports all share one pre-run `active_focus_areas` snapshot). |
+| **5 — Auto-watch** ✅ | `limpet watch`: poller (`_run_watch_cycle`, `cli.py`), `watch_queue` SQLite table (schema v2, restart-safe), backoff-retried `MetadataNotReady`, best-effort OS notifications (`notify.py`), daily digest. See §5 for the full design. |
 | **6 — Replays (stretch)** | `parse/demo.py` over the hosted demo-query API; fill the "needs the demo query" leaves (cast-level abilities, wave management, precise rotations). |
 
 ---

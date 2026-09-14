@@ -17,7 +17,7 @@ from typing import Any
 
 from .. import paths
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS matches (
@@ -74,6 +74,18 @@ CREATE TABLE IF NOT EXISTS progress_snapshots (
 CREATE INDEX IF NOT EXISTS idx_matches_played_at ON matches(played_at);
 """
 
+_SCHEMA_V2 = """
+CREATE TABLE IF NOT EXISTS watch_queue (
+    match_id        INTEGER PRIMARY KEY,
+    status          TEXT NOT NULL DEFAULT 'pending',  -- pending|done|failed
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at INTEGER NOT NULL,
+    last_error      TEXT,
+    enqueued_at     INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL
+);
+"""
+
 
 def connect(path: Path | None = None) -> sqlite3.Connection:
     db_file = path or paths.db_path()
@@ -90,6 +102,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version < 1:
         conn.executescript(_SCHEMA)
+    if version < 2:
+        conn.executescript(_SCHEMA_V2)
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
 
@@ -147,6 +161,17 @@ def recent_matches(conn: sqlite3.Connection, limit: int = 20) -> list[sqlite3.Ro
     return conn.execute(
         "SELECT * FROM matches ORDER BY played_at DESC LIMIT ?", (limit,)
     ).fetchall()
+
+
+def analyzed_match_ids(conn: sqlite3.Connection, match_ids: list[int]) -> set[int]:
+    """Which of `match_ids` already have a stored report."""
+    if not match_ids:
+        return set()
+    placeholders = ", ".join("?" for _ in match_ids)
+    rows = conn.execute(
+        f"SELECT DISTINCT match_id FROM reports WHERE match_id IN ({placeholders})", match_ids
+    ).fetchall()
+    return {r["match_id"] for r in rows}
 
 
 def top_heroes(conn: sqlite3.Connection, account_id: int, limit: int = 3) -> list[sqlite3.Row]:
@@ -268,3 +293,54 @@ def reports_with_context(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 
 def latest_report(conn: sqlite3.Connection) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM reports ORDER BY id DESC LIMIT 1").fetchone()
+
+
+# -- watch queue -----------------------------------------------------------
+# Restart-safe job queue for `limpet watch` (PLAN.md §5, "Auto-watch loop").
+
+
+def enqueue_watch(conn: sqlite3.Connection, match_id: int, now: int) -> None:
+    """Queue a match for the watch pipeline. A no-op if already queued —
+    never resets an in-progress row's attempts/status."""
+    conn.execute(
+        "INSERT OR IGNORE INTO watch_queue "
+        "(match_id, status, attempts, next_attempt_at, enqueued_at, updated_at) "
+        "VALUES (?, 'pending', 0, ?, ?, ?)",
+        (match_id, now, now, now),
+    )
+
+
+def due_watch_items(conn: sqlite3.Connection, now: int) -> list[sqlite3.Row]:
+    """Pending queue rows ready to (re)attempt, oldest-enqueued first."""
+    return conn.execute(
+        "SELECT * FROM watch_queue WHERE status = 'pending' AND next_attempt_at <= ? "
+        "ORDER BY enqueued_at ASC",
+        (now,),
+    ).fetchall()
+
+
+def mark_watch_done(conn: sqlite3.Connection, match_id: int, now: int) -> None:
+    conn.execute(
+        "UPDATE watch_queue SET status = 'done', updated_at = ? WHERE match_id = ?",
+        (now, match_id),
+    )
+
+
+def reschedule_watch(
+    conn: sqlite3.Connection, match_id: int, next_attempt_at: int, error: str, now: int
+) -> None:
+    """Bump attempts and push the next try out — status stays 'pending'."""
+    conn.execute(
+        "UPDATE watch_queue SET attempts = attempts + 1, next_attempt_at = ?, "
+        "last_error = ?, updated_at = ? WHERE match_id = ?",
+        (next_attempt_at, error, now, match_id),
+    )
+
+
+def fail_watch(conn: sqlite3.Connection, match_id: int, error: str, now: int) -> None:
+    """Give up on a queued match — terminal, excluded from `due_watch_items`."""
+    conn.execute(
+        "UPDATE watch_queue SET status = 'failed', attempts = attempts + 1, "
+        "last_error = ?, updated_at = ? WHERE match_id = ?",
+        (error, now, match_id),
+    )

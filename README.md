@@ -18,10 +18,10 @@ what Limpet does.
 
 ## Status
 
-Phases 0–4 done: ingestion, micro/macro feature extraction, rank-bracket
-benchmarks, Claude-written coaching reports, and the long-term memory loop
-(tracked focus areas + a regenerated `PROGRESS.md`). Not yet built: the
-`watch` auto-poller and replay-derived features. See
+Phases 0–5 done: ingestion, micro/macro feature extraction, rank-bracket
+benchmarks, Claude-written coaching reports, the long-term memory loop
+(tracked focus areas + a regenerated `PROGRESS.md`), batch backfill, and the
+`watch` auto-poller. Not yet built: replay-derived features (Phase 6). See
 [`docs/PLAN.md`](docs/PLAN.md) for the full roadmap and what's left.
 
 ## Quick start
@@ -32,7 +32,10 @@ make run ARGS="init"         # prompts for your Steam ID (+ optional API keys)
 make run ARGS="sync"         # pull match history into the local db
 make run ARGS="matches"      # list recent games
 make run ARGS="analyze"      # features + benchmarks + a coaching report for your most recent match
+make run ARGS="backfill --last 10"  # same, for your 10 most recent not-yet-analyzed matches
+make run ARGS="report <match_id>"   # re-print a stored report (no re-fetch, no LLM)
 make run ARGS="progress"     # show the running coaching profile
+make run ARGS="watch --once" # poll once, analyze anything new, then exit
 make run ARGS="help"         # list every command and what it does
 ```
 
@@ -57,6 +60,23 @@ export `ANTHROPIC_API_KEY` in your shell (or `LIMPET_ANTHROPIC_API_KEY` /
 one, pass `--no-report` to stop after features/benchmarks, or `analyze` will
 just print an error and keep what it already computed.
 
+`backfill` uses the Anthropic Batch API (50% cost) — it can take up to a few
+hours per Anthropic's own SLA, and every report in one backfill run sees the
+same tracked-focus-areas snapshot from before the run started (not each
+other's results), since that's what makes batching the expensive call
+possible. It also stops cleanly and tells you how many matches are left if
+it hits deadlock-api's 3/hour metadata rate limit partway through.
+
+`watch` runs forever by default (`limpet watch`, no flag) — polls for new
+matches every `poll_interval_minutes` (default 10, `LIMPET_POLL_INTERVAL_MINUTES`)
+and analyzes each one as it lands. It's restart-safe (the pending-match queue
+lives in SQLite, not memory) and stops cleanly on Ctrl-C or `docker stop`.
+Desktop notifications are best-effort — they only fire when running natively
+on macOS/Linux with a notifier installed; inside Docker (no display) they
+silently no-op, so `digests/YYYY-MM-DD.md` is the record to check instead.
+Use `--once` to run a single poll cycle and exit, e.g. to drive it from your
+own cron/systemd timer instead.
+
 `make help` lists every target (`test`, `lint`, `fmt`, `check`, `clean`, …).
 Without `make`, use a venv directly: `python -m venv .venv && . .venv/bin/activate
 && pip install -e ".[dev]"`, then call `limpet` straight.
@@ -77,6 +97,11 @@ make docker-run ARGS="analyze"        # omit the match id for your most recent m
 make docker-run ARGS="help"           # list every command and what it does
 ```
 
-State persists in the `limpet-data` volume (mounted at `/data`). Once the watch
-poller lands (Phase 5), `make up` will run it as a long-lived service via
-`docker-compose.yml`.
+State persists in the `limpet-data` volume (mounted at `/data`). `make up`
+(`docker compose up -d`) now runs `limpet watch` as a long-lived service —
+that's `docker-compose.yml`'s default `command`. It polls on its own; no
+need to run `sync`/`analyze` manually once it's up. Desktop notifications
+won't fire in this mode (no display in the container) — check
+`digests/YYYY-MM-DD.md` inside the volume, or `docker compose logs -f`, to
+see what it's done. `docker compose down` (or `docker stop`) sends SIGTERM,
+which `watch` catches to finish its current match before exiting cleanly.
