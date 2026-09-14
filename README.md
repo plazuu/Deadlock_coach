@@ -25,9 +25,15 @@ make install                # creates .venv, installs the package + dev deps
 make run ARGS="init"         # prompts for your Steam ID (+ optional API keys)
 make run ARGS="sync"         # pull match history into the local db
 make run ARGS="matches"      # list recent games
-make run ARGS="analyze <match_id>"   # features + benchmarks + a coaching report
+make run ARGS="analyze"      # features + benchmarks + a coaching report for your most recent match
 make run ARGS="progress"     # show the running coaching profile
+make run ARGS="help"         # list every command and what it does
 ```
+
+`analyze` takes an optional match id (`make run ARGS="analyze <match_id>"`) —
+omit it to analyze your most recent match. Run `limpet help` (or
+`make run ARGS="help"`) any time for the full command list with descriptions,
+or `limpet <command> --help` for a specific command's options.
 
 `analyze` needs an Anthropic API key to produce the actual coaching report —
 export `ANTHROPIC_API_KEY` in your shell (or `LIMPET_ANTHROPIC_API_KEY` /
@@ -51,7 +57,8 @@ The container takes all configuration from the environment, so no interactive
 cp .env.example .env          # fill in LIMPET_STEAM_ID + LIMPET_ANTHROPIC_API_KEY
 make docker-build
 make docker-run ARGS="sync"
-make docker-run ARGS="analyze <match_id>"
+make docker-run ARGS="analyze"        # omit the match id for your most recent match
+make docker-run ARGS="help"           # list every command and what it does
 ```
 
 State persists in the `limpet-data` volume (mounted at `/data`). Once the watch

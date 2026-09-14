@@ -69,6 +69,24 @@ def _require_account(settings: Settings) -> int:
         raise typer.Exit(1) from e
 
 
+@app.command("help")
+def help_cmd() -> None:
+    """List every command and what it does."""
+    click_app = typer.main.get_command(app)
+    table = Table(title="limpet commands", show_header=True, header_style="bold")
+    table.add_column("command")
+    table.add_column("description")
+    for name, cmd in click_app.commands.items():
+        subcommands = getattr(cmd, "commands", None)
+        if subcommands:
+            for sub_name, sub_cmd in subcommands.items():
+                table.add_row(f"{name} {sub_name}", sub_cmd.get_short_help_str(limit=100))
+        else:
+            table.add_row(name, cmd.get_short_help_str(limit=100))
+    console.print(table)
+    console.print("\n[dim]Run `limpet <command> --help` for a command's full options.[/dim]")
+
+
 @app.command()
 def init(
     steam_id: Annotated[str, typer.Option(prompt="Your Steam ID / SteamID64 / profile URL")],
