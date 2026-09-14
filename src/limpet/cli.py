@@ -186,6 +186,12 @@ def sync(
         new = sync_match_history(client, conn, account_id, force_refetch=force_refetch)
         if not new:
             console.print("Up to date — no new matches.")
+            if not force_refetch:
+                console.print(
+                    "[dim]This reads the API's cached match history, which doesn't always "
+                    "include a match you just finished. Try `sync --force-refetch` (rate "
+                    "limited, ~1-10/hour) to ask it to refresh from Steam.[/dim]"
+                )
             return
         console.print(f"[green]{len(new)} new match(es):[/green]")
         _print_matches(new[:20], Assets(client))
@@ -196,12 +202,19 @@ def sync(
 @app.command()
 def matches(
     limit: Annotated[int, typer.Option(help="How many recent matches to show.")] = 15,
+    force_refetch: Annotated[
+        bool,
+        typer.Option(
+            help="Ask the API to refetch history from Steam (rate limited, ~1-10/hour) — "
+            "use this if a match you just finished isn't showing up."
+        ),
+    ] = False,
 ) -> None:
     """List recent match history (from the API, not the local db)."""
     settings = load_settings()
     account_id = _require_account(settings)
     with _client(settings) as client:
-        raw = client.match_history(account_id)
+        raw = client.match_history(account_id, force_refetch=force_refetch)
         entries = [MatchHistoryEntry.model_validate(r) for r in raw]
         entries.sort(key=lambda e: e.start_time, reverse=True)
         _print_matches(entries[:limit], Assets(client))
@@ -235,6 +248,14 @@ def analyze(
         bool,
         typer.Option(help="Also call Claude for a coaching report (needs an Anthropic key)."),
     ] = True,
+    force_refetch: Annotated[
+        bool,
+        typer.Option(
+            help="When match_id is omitted, ask the API to refetch history from Steam "
+            "(rate limited, ~1-10/hour) — use this if your most recent match doesn't "
+            "get picked."
+        ),
+    ] = False,
 ) -> None:
     """Compute micro/macro features + benchmarks, then (by default) a coaching report."""
     settings = load_settings()
@@ -242,7 +263,8 @@ def analyze(
     with _client(settings) as client, db.session() as conn:
         if match_id is None:
             history = [
-                MatchHistoryEntry.model_validate(r) for r in client.match_history(account_id)
+                MatchHistoryEntry.model_validate(r)
+                for r in client.match_history(account_id, force_refetch=force_refetch)
             ]
             if not history:
                 console.print("[red]No match history found for this account.[/red]")

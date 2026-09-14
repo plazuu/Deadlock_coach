@@ -35,6 +35,13 @@ omit it to analyze your most recent match. Run `limpet help` (or
 `make run ARGS="help"`) any time for the full command list with descriptions,
 or `limpet <command> --help` for a specific command's options.
 
+**Just played a match and it's not showing up in `sync`/`matches`/`analyze`?**
+The deadlock-api.com match-history list is server-side cached — it doesn't
+always include a match the moment it ends. Pass `--force-refetch` to
+`sync`, `matches`, or `analyze` to ask the API to refresh it from Steam.
+That's rate-limited to roughly 1-10 requests/hour, so it's meant for
+occasional use ("did my last game post yet?"), not every run.
+
 `analyze` needs an Anthropic API key to produce the actual coaching report —
 export `ANTHROPIC_API_KEY` in your shell (or `LIMPET_ANTHROPIC_API_KEY` /
 `limpet init --anthropic-api-key ...` to store it in config instead). Without
